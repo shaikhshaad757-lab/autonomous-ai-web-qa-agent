@@ -1,0 +1,236 @@
+diff --git a/app/agents/analyzer/bug_analyzer.py b/app/agents/analyzer/bug_analyzer.py
+index 0000000..1111111 100644
+--- a/app/agents/analyzer/bug_analyzer.py
++++ b/app/agents/analyzer/bug_analyzer.py
+@@ -147,6 +147,161 @@
+     return f"{module}|{category}|{signal}"
+ 
+ 
++# ======================================================================
++# Root-cause-aware clustering (adds ONTO the Slice 1/2 per-module
++# signature dedup above; never replaces it).
++#
++# The per-module signature dedup above only ever merges repeated
++# occurrences of the SAME page/module — it correctly leaves e.g.
++# /welcome and /patients as separate candidates even when both fail
++# for what is actually the same systemic reason (a shared trailing-
++# slash routing issue, or a shared cross-origin dependency failing on
++# every page). That under-merging is what produces "26 near-identical
++# 404 bugs" from one real underlying cause.
++#
++# The functions below detect a small, deliberately narrow set of such
++# cross-page root-cause patterns from concrete request/response
++# evidence. When a bug matches one, deduplicate_bugs() clusters it by
++# that root-cause key INSTEAD OF the per-module signature — across
++# modules/pages — so all matching occurrences become one bug. When a
++# bug matches none of them (e.g. an unrelated API 404, or a bug with no
++# network evidence at all such as a deep-page-audit finding), it falls
++# straight back to the untouched per-module signature dedup above, so
++# nothing not covered by these rules changes behavior at all.
++# ======================================================================
++
++def _bug_category(bug: "Bug") -> str:
++    """Recover the test-category component from a Bug's stored
++    signature (format "<module>|<category>|<signal>", built by
++    _bug_signature() above). Used only to gate which root-cause rules
++    may consider this bug — e.g. deep-page-audit findings (unnamed
++    interactive elements, horizontal overflow, etc.) must never be
++    pulled into a network/404 root-cause cluster. Returns "" if the
++    signature isn't in the expected shape rather than raising, so a
++    bug built outside the normal build_bug() flow (e.g. directly in a
++    test) degrades to "no root-cause clustering" instead of crashing."""
++    parts = (bug.signature or "").split("|", 2)
++    return parts[1] if len(parts) >= 2 else ""
++
++
++def _normalize_request_url(url: str) -> Dict[str, object]:
++    """Break a request/page URL into the components used for root-cause
++    comparison: same-origin-or-not, and a trailing-slash-insensitive
++    path with the query string dropped entirely (this is where
++    query-string noise like Next.js `?_rsc=...` cache-busting tokens
++    gets removed for clustering purposes — the ORIGINAL url is never
++    modified or lost, this is only ever used to build a comparison
++    key). Never raises on a malformed/relative URL; degrades to
++    treating it as an empty-origin relative path instead."""
++    try:
++        parsed = urlparse(url or "")
++    except ValueError:
++        return {"origin": "", "path": url or "", "had_trailing_slash": False}
++    path = parsed.path or ""
++    had_trailing_slash = len(path) > 1 and path.endswith("/")
++    return {
++        "origin": f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else "",
++        "path": path.rstrip("/") or "/",
++        "had_trailing_slash": had_trailing_slash,
++    }
++
++
++def _root_cause_cluster_key(bug: "Bug") -> Optional[str]:
++    """Return a cross-page root-cause cluster key for `bug` if — and
++    only if — there is concrete request/response evidence of one of the
++    recognized shared-cause patterns below. Returns None otherwise,
++    which means "no opinion, use the normal per-module signature dedup"
++    — this function never itself decides two bugs are UNRELATED, it
++    only ever opts a bug INTO a narrower cross-page cluster.
++
++    Deliberately conservative: a same-origin 404 whose failed-request
++    path does not match the tested page's own path (e.g. an actual API
++    endpoint returning 404) matches neither pattern below and is left
++    alone, so it never gets merged with an unrelated missing route.
++    """
++    if not bug.network_errors:
++        # No failed network request recorded at all — e.g. a deep-page
++        # audit / accessibility finding. Root-cause network clustering
++        # never applies; let it fall back to the per-module dedup.
++        return None
++
++    if _bug_category(bug) == "deep_page_audit":
++        # Belt-and-braces: even if a deep-page-audit finding somehow
++        # carries a network_errors entry, it must never be folded into
++        # a network/404 root-cause cluster (requirement: keep the
++        # unnamed-interactive / horizontal-overflow clusters separate
++        # from HTTP/network clusters).
++        return None
++
++    evidence_text = " ".join(
++        bug.console_errors + bug.network_errors + [bug.actual or ""]
++    ).lower()
++
++    failed = _normalize_request_url(bug.network_errors[0])
++    target = _normalize_request_url(bug.url)
++
++    same_origin = (
++        not failed["origin"] or not target["origin"] or failed["origin"] == target["origin"]
++    )
++
++    # Pattern 1 — shared trailing-slash routing failure: the failed
++    # request is (same-origin) the tested page's OWN path, differing
++    # from it only by a trailing slash, and the failure is a 404.
++    # e.g. /welcome -> /welcome/, /patients -> /patients/,
++    # /settings/beds-management -> /settings/beds-management/.
++    if (
++        "404" in evidence_text
++        and failed["path"]
++        and target["path"]
++        and failed["path"] == target["path"]
++        and failed["had_trailing_slash"] != target["had_trailing_slash"]
++        and same_origin
++    ):
++        return "rootcause:trailing-slash-routing"
++
++    # Pattern 2 — shared cross-origin dependency: the failed request is
++    # to a DIFFERENT origin than the page under test (e.g. every page
++    # embeds a request to a shared third-party/shared-service host).
++    # Distinct pages hitting the same cross-origin path are one shared
++    # dependency issue, not one bug per page. Query-string noise (e.g.
++    # differing `?_rsc=...` tokens) is dropped by _normalize_request_url
++    # above, so different tokens on the same path still cluster.
++    if failed["origin"] and target["origin"] and failed["origin"] != target["origin"]:
++        return f"rootcause:cross-origin:{failed['origin']}{failed['path']}"
++
++    return None
++
++
++def _root_cause_title(root_key: str, fallback_title: str) -> str:
++    """Human-readable title for a bug produced by root-cause
++    clustering, describing the shared underlying issue rather than a
++    single page's test name (e.g. "Shared trailing-slash routing
++    failures across pages" instead of "Smoke: page loads cleanly —
++    <page> — failed"). Falls back to the bug's own original title for
++    any key this function doesn't recognize, rather than guessing."""
++    if root_key == "rootcause:trailing-slash-routing":
++        return (
++            "Shared trailing-slash routing failures across pages "
++            "(page URL returns 404 when requested with a trailing slash)"
++        )
++    if root_key.startswith("rootcause:cross-origin:"):
++        origin_and_path = root_key[len("rootcause:cross-origin:"):]
++        return f"Shared cross-origin request failure — {origin_and_path}"
++    return fallback_title
++
++
++def _root_cause_module(root_key: str, fallback_module: str) -> str:
++    """Display module for a root-cause-clustered bug. A cluster spans
++    many pages/modules, so the single page-derived module from the
++    first occurrence would be misleading; use a label that reflects
++    the shared nature of the cluster instead."""
++    if root_key == "rootcause:trailing-slash-routing":
++        return "Routing (multiple pages)"
++    if root_key.startswith("rootcause:cross-origin:"):
++        return "Shared dependency (cross-origin)"
++    return fallback_module
++
++
+ def classify_severity(result: TestResult) -> str:
+     text = " ".join(result.console_errors + result.failed_requests).lower()
+     if any(k in text for k in ("500", "unauthorized data", "cannot read", "fatal")):
+@@ -261,25 +416,49 @@
+ 
+ 
+ def deduplicate_bugs(candidates: List[Bug]) -> List[Bug]:
+-    """Merge bugs sharing a stable signature (module + test category +
+-    normalized dominant failure signal) into one master bug per distinct
+-    issue. The first occurrence of a signature becomes the master; every
+-    later match's test/page is appended to the master's `affected` list
+-    as evidence rather than creating a separate bug entry.
+-
+-    Never merges bugs solely because their title or severity match — only
+-    a shared signature triggers a merge. Reproducibility of the master
+-    bug (the first occurrence) is preserved as-is; later merged
+-    occurrences don't overwrite it.
++    """Merge bugs representing the same underlying issue into one master
++    bug per distinct issue, run BEFORE final bug IDs/report ordering are
++    finalized. Every later match's test/page is appended to the master's
++    `affected` list as evidence rather than creating a separate bug
++    entry, and the numeric/qualitative reproducibility of the master
++    (its own first occurrence) is preserved as-is — later merged
++    occurrences never overwrite it.
++
++    Two independent grouping keys feed the same merge loop:
++
++    1. Root-cause key (_root_cause_cluster_key) — a small, deliberately
++       narrow set of cross-page patterns backed by concrete request
++       evidence (e.g. every page 404ing on its own URL+"/", or every
++       page hitting the same failing cross-origin dependency). When a
++       bug matches one of these, it is clustered by that pattern ACROSS
++       modules/pages, and the resulting bug's title/module are rewritten
++       to describe the shared cause instead of a single page's name.
++
++    2. Per-module signature (bug.signature = module + test category +
++       normalized dominant failure signal) — the original Slice 1/2
++       dedup, unchanged, used whenever a bug matches no root-cause
++       pattern. This is what keeps unrelated same-category failures
++       (e.g. two different broken API endpoints, both 404s) from ever
++       being merged just because they share a status code.
++
++    Never merges bugs solely because their title or severity match.
+     """
+     merged: Dict[str, Bug] = {}
+     order: List[str] = []
+ 
+     for bug in candidates:
+-        key = bug.signature
++        root_key = _root_cause_cluster_key(bug)
++        # root_key already carries its own "rootcause:..." prefix (see
++        # _root_cause_cluster_key) so it can't collide with a
++        # "signature:..." key from the per-module fallback below.
++        key = root_key if root_key else f"signature:{bug.signature}"
++
+         if key not in merged:
+             merged[key] = bug
+             order.append(key)
++            if root_key:
++                bug.title = _root_cause_title(root_key, bug.title)
++                bug.module = _root_cause_module(root_key, bug.module)
+             # The master's own occurrence counts as the first affected entry.
+             bug.affected.append({"url": bug.url, "detail": bug.actual})
+         else:
+@@ -288,7 +467,7 @@
+             master.console_errors = dedupe_console_messages(
+                 master.console_errors + bug.console_errors
+             )
+-            for net_err in bug.network_errors:
++            for net_err in (bug.network_errors or []):
+                 if net_err not in master.network_errors:
+                     master.network_errors.append(net_err)
+             if _SEVERITY_RANK.get(bug.severity, -1) > _SEVERITY_RANK.get(master.severity, -1):

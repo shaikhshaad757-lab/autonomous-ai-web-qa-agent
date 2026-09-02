@@ -1,0 +1,217 @@
+"""Bug reproduction + severity classification (Phase 1 version).
+
+Full spec calls for an LLM-assisted root-cause/dedup engine — that lands in
+a later phase once there's enough test variety for dedup to matter. Phase 1
+implements the reproduction and severity pieces deterministically so nothing
+downstream is blocked on Ollama being reachable.
+"""
+from __future__ import annotations
+
+import itertools
+import re
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+from app.agents.functional.functional_agent import FunctionalAgent, TestCase, TestResult
+
+_bug_counter = itertools.count(1)
+
+_SEVERITY_RANK = {"P0": 4, "P1": 3, "P2": 2, "P3": 1, "P4": 0}
+
+
+@dataclass
+class Bug:
+    bug_ref: str
+    title: str
+    module: str
+    severity: str
+    url: str
+    steps: List[str]
+    expected: str
+    actual: str
+    reproducibility: str
+    screenshot_path: Optional[str]
+    console_errors: List[str]
+    network_errors: List[str]
+    # Every test/page occurrence merged into this bug (including its own
+    # first occurrence). Populated by deduplicate_bugs(); empty for a bug
+    # that hasn't gone through dedup yet.
+    affected: List[Dict[str, str]] = field(default_factory=list)
+    # Stable signature used ONLY for dedup grouping — not persisted/reported
+    # verbatim, just used to decide which bugs represent the same issue.
+    signature: str = ""
+
+
+def _guess_module(url: str) -> str:
+    # crude path-segment heuristic; refined in Phase 3 using the full site map
+    segments = [s for s in url.split("/") if s and "://" not in s and "." not in s]
+    return segments[-1].replace("-", " ").title() if segments else "Unknown"
+
+
+def _normalize_message(text: str) -> str:
+    """Normalize a console/error message for dedup comparison: lowercase,
+    collapse whitespace, and replace runs of digits with '#' so messages
+    that differ only by a timestamp, line number, or record ID compare
+    equal — without discarding the original text anywhere else."""
+    text = (text or "").strip().lower()
+    text = re.sub(r"\d+", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _normalize_endpoint(url: str) -> str:
+    """Normalize a failed-request URL to its path with numeric/ID-like
+    segments and the query string stripped, so the same broken endpoint
+    hit with different record IDs across pages compares equal."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = path.split("/")
+    normalized = [
+        "#" if re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s) else s
+        for s in segments
+    ]
+    return "/".join(normalized)
+
+
+def dedupe_console_messages(messages: List[str]) -> List[str]:
+    """Deduplicate console/error messages using a normalized comparison
+    key (whitespace/digit-insensitive), while preserving each distinct
+    message's original text and first-seen order. Genuinely different
+    messages are never collapsed together."""
+    seen: set[str] = set()
+    result: List[str] = []
+    for msg in messages:
+        key = _normalize_message(msg)
+        if key not in seen:
+            seen.add(key)
+            result.append(msg)
+    return result
+
+
+def _signature_module(url: str) -> str:
+    """Module classification used ONLY for dedup signatures — strips
+    numeric/ID-like path segments so /patients/12, /patients/45, and
+    /patients/99 all reduce to the same 'patients' module instead of
+    colliding on the record ID (which _guess_module, used for display,
+    does not do — it intentionally uses the LAST segment for a readable
+    title, which is often the ID itself)."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = [s for s in path.split("/") if s]
+    meaningful = [
+        s for s in segments
+        if not (re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s))
+    ]
+    if meaningful:
+        return meaningful[0].lower()
+    return segments[0].lower() if segments else "unknown"
+
+
+def _bug_signature(result: TestResult) -> str:
+    """Stable signature deciding whether two failing tests represent the
+    SAME underlying issue: (ID-stripped) module + test category + the
+    normalized dominant failure signal. Deliberately does NOT use title
+    or severity, per requirement: never merge bugs solely because those
+    match."""
+    module = _signature_module(result.test_case.target_url)
+    category = result.test_case.category
+    if result.failed_requests:
+        signal = f"network:{_normalize_endpoint(result.failed_requests[0])}"
+    elif result.console_errors:
+        signal = f"console:{_normalize_message(result.console_errors[0])}"
+    else:
+        # No console/network signal (e.g. a deep-audit finding) — fall back
+        # to the normalized detail text so unrelated failures with no
+        # console/network evidence don't all collapse into one bucket.
+        signal = f"detail:{_normalize_message(result.detail or '')}"
+    return f"{module}|{category}|{signal}"
+
+
+def classify_severity(result: TestResult) -> str:
+    text = " ".join(result.console_errors + result.failed_requests).lower()
+    if any(k in text for k in ("500", "unauthorized data", "cannot read", "fatal")):
+        return "P1"
+    if result.failed_requests:
+        return "P2"
+    if result.console_errors:
+        return "P3"
+    return "P4"
+
+
+async def reproduce_failure(
+    agent: FunctionalAgent, test_case: TestCase, max_retries: int
+) -> tuple[bool, List[TestResult]]:
+    """Re-run a failing test up to `max_retries` more times. Returns
+    (confirmed, all_results). `confirmed` is True only if the failure
+    reproduced on every attempt (simple, conservative definition for
+    Phase 1 — flaky/intermittent failures are reported separately in a
+    later phase rather than silently dropped)."""
+    results: List[TestResult] = []
+    for attempt in range(1, max_retries + 1):
+        result = await agent.execute(test_case, attempt_index=attempt)
+        results.append(result)
+        if result.status == "passed":
+            return False, results
+    return True, results
+
+
+def build_bug(result: TestResult, reproducibility: str) -> Bug:
+    ref = f"BUG-{next(_bug_counter):04d}"
+    return Bug(
+        bug_ref=ref,
+        title=f"{result.test_case.name} — failed",
+        module=_guess_module(result.test_case.target_url),
+        severity=classify_severity(result),
+        url=result.test_case.target_url,
+        steps=[f"Navigate to {result.test_case.target_url}", "Observe console/network errors"],
+        expected="Page loads without console errors or failed network requests.",
+        actual=result.detail,
+        reproducibility=reproducibility,
+        screenshot_path=result.screenshot_path,
+        console_errors=dedupe_console_messages(result.console_errors),
+        network_errors=result.failed_requests,
+        affected=[],
+        signature=_bug_signature(result),
+    )
+
+
+def deduplicate_bugs(candidates: List[Bug]) -> List[Bug]:
+    """Merge bugs sharing a stable signature (module + test category +
+    normalized dominant failure signal) into one master bug per distinct
+    issue. The first occurrence of a signature becomes the master; every
+    later match's test/page is appended to the master's `affected` list
+    as evidence rather than creating a separate bug entry.
+
+    Never merges bugs solely because their title or severity match — only
+    a shared signature triggers a merge. Reproducibility of the master
+    bug (the first occurrence) is preserved as-is; later merged
+    occurrences don't overwrite it.
+    """
+    merged: Dict[str, Bug] = {}
+    order: List[str] = []
+
+    for bug in candidates:
+        key = bug.signature
+        if key not in merged:
+            merged[key] = bug
+            order.append(key)
+            # The master's own occurrence counts as the first affected entry.
+            bug.affected.append({"url": bug.url, "detail": bug.actual})
+        else:
+            master = merged[key]
+            master.affected.append({"url": bug.url, "detail": bug.actual})
+            master.console_errors = dedupe_console_messages(
+                master.console_errors + bug.console_errors
+            )
+            for net_err in bug.network_errors:
+                if net_err not in master.network_errors:
+                    master.network_errors.append(net_err)
+            if _SEVERITY_RANK.get(bug.severity, -1) > _SEVERITY_RANK.get(master.severity, -1):
+                master.severity = bug.severity
+
+    return [merged[key] for key in order]

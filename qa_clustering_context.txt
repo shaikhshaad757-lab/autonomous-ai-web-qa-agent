@@ -1,0 +1,2100 @@
+===== FILE: app/agents/analyzer/bug_analyzer.py =====
+"""Bug reproduction + severity classification (Phase 1 version).
+
+Full spec calls for an LLM-assisted root-cause/dedup engine — that lands in
+a later phase once there's enough test variety for dedup to matter. Phase 1
+implements the reproduction and severity pieces deterministically so nothing
+downstream is blocked on Ollama being reachable.
+"""
+from __future__ import annotations
+
+import itertools
+import re
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+from app.agents.functional.functional_agent import FunctionalAgent, TestCase, TestResult
+
+_bug_counter = itertools.count(1)
+
+_SEVERITY_RANK = {"P0": 4, "P1": 3, "P2": 2, "P3": 1, "P4": 0}
+
+
+@dataclass
+class Bug:
+    bug_ref: str
+    title: str
+    module: str
+    severity: str
+    url: str
+    steps: List[str]
+    expected: str
+    actual: str
+    reproducibility: str
+    screenshot_path: Optional[str]
+    console_errors: List[str]
+    network_errors: List[str]
+    # Every test/page occurrence merged into this bug (including its own
+    # first occurrence). Populated by deduplicate_bugs(); empty for a bug
+    # that hasn't gone through dedup yet.
+    affected: List[Dict[str, str]] = field(default_factory=list)
+    # Stable signature used ONLY for dedup grouping — not persisted/reported
+    # verbatim, just used to decide which bugs represent the same issue.
+    signature: str = ""
+    # Numeric reproducibility, parsed from `reproducibility` where possible
+    # (e.g. "3/3 retries failed" -> 100). None when it can't be parsed
+    # (e.g. "not retried") — never guessed.
+    reproducibility_pct: Optional[int] = None
+    # Root cause / recommended fix: populated by root_cause_analyzer.py
+    # (Slice 3). None until analysis runs — the report renders these as
+    # "Not available" rather than inventing anything.
+    root_cause: Optional[str] = None
+    recommended_fix: Optional[str] = None
+    # Model confidence (0-100) in root_cause, when analysis was run and
+    # evidence was judged sufficient. None otherwise.
+    confidence: Optional[int] = None
+    # Short, human-readable description of what this test actually
+    # checked, derived only from existing TestCase data.
+    what_was_tested: str = ""
+
+
+def _guess_module(url: str) -> str:
+    # crude path-segment heuristic; refined in Phase 3 using the full site map
+    segments = [s for s in url.split("/") if s and "://" not in s and "." not in s]
+    return segments[-1].replace("-", " ").title() if segments else "Unknown"
+
+
+def _normalize_message(text: str) -> str:
+    """Normalize a console/error message for dedup comparison: lowercase,
+    collapse whitespace, and replace runs of digits with '#' so messages
+    that differ only by a timestamp, line number, or record ID compare
+    equal — without discarding the original text anywhere else."""
+    text = (text or "").strip().lower()
+    text = re.sub(r"\d+", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _normalize_endpoint(url: str) -> str:
+    """Normalize a failed-request URL to its path with numeric/ID-like
+    segments and the query string stripped, so the same broken endpoint
+    hit with different record IDs across pages compares equal."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = path.split("/")
+    normalized = [
+        "#" if re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s) else s
+        for s in segments
+    ]
+    return "/".join(normalized)
+
+
+def dedupe_console_messages(messages: List[str]) -> List[str]:
+    """Deduplicate console/error messages using a normalized comparison
+    key (whitespace/digit-insensitive), while preserving each distinct
+    message's original text and first-seen order. Genuinely different
+    messages are never collapsed together."""
+    seen: set[str] = set()
+    result: List[str] = []
+    for msg in messages:
+        key = _normalize_message(msg)
+        if key not in seen:
+            seen.add(key)
+            result.append(msg)
+    return result
+
+
+def _signature_module(url: str) -> str:
+    """Module classification used ONLY for dedup signatures — strips
+    numeric/ID-like path segments so /patients/12, /patients/45, and
+    /patients/99 all reduce to the same 'patients' module instead of
+    colliding on the record ID (which _guess_module, used for display,
+    does not do — it intentionally uses the LAST segment for a readable
+    title, which is often the ID itself)."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = [s for s in path.split("/") if s]
+    meaningful = [
+        s for s in segments
+        if not (re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s))
+    ]
+    if meaningful:
+        return meaningful[0].lower()
+    return segments[0].lower() if segments else "unknown"
+
+
+def _bug_signature(result: TestResult) -> str:
+    """Stable signature deciding whether two failing tests represent the
+    SAME underlying issue: (ID-stripped) module + test category + the
+    normalized dominant failure signal. Deliberately does NOT use title
+    or severity, per requirement: never merge bugs solely because those
+    match."""
+    module = _signature_module(result.test_case.target_url)
+    category = result.test_case.category
+    if result.failed_requests:
+        signal = f"network:{_normalize_endpoint(result.failed_requests[0])}"
+    elif result.console_errors:
+        signal = f"console:{_normalize_message(result.console_errors[0])}"
+    else:
+        # No console/network signal (e.g. a deep-audit finding) — fall back
+        # to the normalized detail text so unrelated failures with no
+        # console/network evidence don't all collapse into one bucket.
+        signal = f"detail:{_normalize_message(result.detail or '')}"
+    return f"{module}|{category}|{signal}"
+
+
+def classify_severity(result: TestResult) -> str:
+    text = " ".join(result.console_errors + result.failed_requests).lower()
+    if any(k in text for k in ("500", "unauthorized data", "cannot read", "fatal")):
+        return "P1"
+    if result.failed_requests:
+        return "P2"
+    if result.console_errors:
+        return "P3"
+    return "P4"
+
+
+async def reproduce_failure(
+    agent: FunctionalAgent, test_case: TestCase, max_retries: int
+) -> tuple[bool, List[TestResult]]:
+    """Re-run a failing test up to `max_retries` more times. Returns
+    (confirmed, all_results). `confirmed` is True only if the failure
+    reproduced on every attempt (simple, conservative definition for
+    Phase 1 — flaky/intermittent failures are reported separately in a
+    later phase rather than silently dropped)."""
+    results: List[TestResult] = []
+    for attempt in range(1, max_retries + 1):
+        result = await agent.execute(test_case, attempt_index=attempt)
+        results.append(result)
+        if result.status == "passed":
+            return False, results
+    return True, results
+
+
+def _parse_reproducibility_pct(reproducibility: str) -> Optional[int]:
+    """Parse a numeric reproducibility percentage from strings like
+    '3/3 retries failed' -> 100. Returns None for non-numeric forms
+    (e.g. 'not retried') rather than guessing a value."""
+    match = re.match(r"(\d+)\s*/\s*(\d+)", reproducibility or "")
+    if not match:
+        return None
+    numerator, denominator = int(match.group(1)), int(match.group(2))
+    if denominator == 0:
+        return None
+    return round((numerator / denominator) * 100)
+
+
+def _what_was_tested(result: TestResult) -> str:
+    """Human-readable description of what this test actually checked,
+    taken directly from the TestCase's own name — never invented."""
+    return result.test_case.name
+
+
+def _reproduction_steps(result: TestResult) -> List[str]:
+    """Build a concrete 3-step reproduction procedure from the TestCase's
+    own data (category / element type / field name, where present) and
+    what was actually observed in the result. Uses getattr() defensively
+    since TestCase's optional fields (element_type, test_data) may or may
+    not be populated depending on test category — never invents behavior
+    that wasn't actually captured."""
+    tc = result.test_case
+    category = getattr(tc, "category", "") or ""
+    element_type = getattr(tc, "element_type", None)
+    test_data = getattr(tc, "test_data", None) or {}
+    field_name = test_data.get("field_name") if isinstance(test_data, dict) else None
+
+    step1 = f"Navigate to {tc.target_url}"
+
+    if category == "smoke":
+        step2 = "Allow the page to load fully"
+    elif category == "deep_page_audit":
+        step2 = "Allow the page to render and run an automated DOM audit"
+    elif field_name and element_type:
+        step2 = f"Locate the {element_type} field '{field_name}' and inspect/interact with it"
+    elif element_type:
+        step2 = f"Locate and interact with the {element_type} element being audited"
+    elif field_name:
+        step2 = f"Locate the field '{field_name}'"
+    elif category:
+        step2 = f"Perform the '{category.replace('_', ' ')}' check on this page"
+    else:
+        step2 = "Perform the automated check on this page"
+
+    if result.failed_requests:
+        step3 = f"Observe the failed network request: {result.failed_requests[0]}"
+    elif result.console_errors:
+        step3 = f"Observe the console error: {result.console_errors[0]}"
+    elif result.detail:
+        step3 = f"Observe the result: {result.detail}"
+    else:
+        step3 = "Observe the failure"
+
+    return [step1, step2, step3]
+
+
+def build_bug(result: TestResult, reproducibility: str) -> Bug:
+    ref = f"BUG-{next(_bug_counter):04d}"
+    return Bug(
+        bug_ref=ref,
+        title=f"{result.test_case.name} — failed",
+        module=_guess_module(result.test_case.target_url),
+        severity=classify_severity(result),
+        url=result.test_case.target_url,
+        steps=_reproduction_steps(result),
+        expected="Page loads without console errors or failed network requests.",
+        actual=result.detail,
+        reproducibility=reproducibility,
+        screenshot_path=result.screenshot_path,
+        console_errors=dedupe_console_messages(result.console_errors),
+        network_errors=result.failed_requests,
+        affected=[],
+        signature=_bug_signature(result),
+        reproducibility_pct=_parse_reproducibility_pct(reproducibility),
+        root_cause=None,
+        recommended_fix=None,
+        what_was_tested=_what_was_tested(result),
+    )
+
+
+def deduplicate_bugs(candidates: List[Bug]) -> List[Bug]:
+    """Merge bugs sharing a stable signature (module + test category +
+    normalized dominant failure signal) into one master bug per distinct
+    issue. The first occurrence of a signature becomes the master; every
+    later match's test/page is appended to the master's `affected` list
+    as evidence rather than creating a separate bug entry.
+
+    Never merges bugs solely because their title or severity match — only
+    a shared signature triggers a merge. Reproducibility of the master
+    bug (the first occurrence) is preserved as-is; later merged
+    occurrences don't overwrite it.
+    """
+    merged: Dict[str, Bug] = {}
+    order: List[str] = []
+
+    for bug in candidates:
+        key = bug.signature
+        if key not in merged:
+            merged[key] = bug
+            order.append(key)
+            # The master's own occurrence counts as the first affected entry.
+            bug.affected.append({"url": bug.url, "detail": bug.actual})
+        else:
+            master = merged[key]
+            master.affected.append({"url": bug.url, "detail": bug.actual})
+            master.console_errors = dedupe_console_messages(
+                master.console_errors + bug.console_errors
+            )
+            for net_err in bug.network_errors:
+                if net_err not in master.network_errors:
+                    master.network_errors.append(net_err)
+            if _SEVERITY_RANK.get(bug.severity, -1) > _SEVERITY_RANK.get(master.severity, -1):
+                master.severity = bug.severity
+
+    return [merged[key] for key in order]
+
+
+def sort_bugs_by_severity(bugs: List[Bug]) -> List[Bug]:
+    """Return a NEW list of the given bugs ordered highest-severity first
+    (P0 > P1 > P2 > P3 > P4), preserving relative order among bugs of
+    equal severity (stable sort). Does not mutate the input list — used
+    by root-cause analysis to decide which bugs get priority within the
+    per-run analysis cap."""
+    return sorted(bugs, key=lambda b: -_SEVERITY_RANK.get(b.severity, -1))
+
+===== FILE: app/orchestrator/orchestrator.py =====
+"""HMS AI QA Agent orchestrator.
+
+LOGIN -> DISCOVER -> GENERATE TESTS -> EXECUTE -> REPRODUCE FAILURES
+-> BUILD BUGS -> REPORT.
+
+Phase 2 adds safe functional UI audits while keeping destructive
+and state-changing actions disabled.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.agents.dataflow.dataflow_agent import DataFlowAgent
+from app.agents.analyzer.bug_analyzer import (
+    build_bug,
+    deduplicate_bugs,
+    reproduce_failure,
+    sort_bugs_by_severity,
+)
+from app.agents.analyzer.root_cause_analyzer import analyze_bugs
+from app.agents.discovery.discovery_agent import DiscoveryAgent
+from app.agents.functional.functional_agent import FunctionalAgent
+from app.browser.browser_manager import BrowserManager
+from app.database.db import Database
+from app.llm.ollama_client import OllamaClient
+from app.reporting.report_generator import generate_reports
+from app.utils.config import AppConfig, Secrets
+from app.utils.logger import register_secret, setup_logging
+
+logger = logging.getLogger("hms_qa_agent.orchestrator")
+
+
+class Orchestrator:
+
+    def __init__(
+        self,
+        secrets: Secrets,
+        app_config: AppConfig,
+        project_root: Path,
+    ) -> None:
+
+        self.secrets = secrets
+        self.config = app_config
+        self.project_root = project_root
+
+        self.run_id = (
+            f"run_"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_"
+            f"{uuid.uuid4().hex[:6]}"
+        )
+
+        self.run_dir = (
+            project_root
+            / app_config.reporting.output_dir
+            / self.run_id
+        )
+
+        self.screenshots_dir = self.run_dir / "screenshots"
+        self.logs_dir = self.run_dir / "logs"
+        self.bugs_dir = self.run_dir / "bugs"
+
+        for directory in (
+            self.run_dir,
+            self.screenshots_dir,
+            self.logs_dir,
+            self.bugs_dir,
+        ):
+            directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        # Register credentials with the log redaction system.
+        register_secret(
+            secrets.hms_email,
+            secrets.hms_password,
+        )
+
+        self.logger = setup_logging(
+            self.logs_dir
+        )
+
+        self.db = Database(
+            self.run_dir / "run.db"
+        )
+
+        self.ollama = OllamaClient(
+            host=secrets.ollama_host,
+            model=secrets.ollama_model,
+            temperature=app_config.llm.temperature,
+            max_tokens=app_config.llm.max_tokens,
+            timeout_seconds=(
+                app_config.llm.request_timeout_seconds
+            ),
+        )
+
+    # ================================================================
+    # MAIN RUN
+    # ================================================================
+
+    async def run(self) -> dict:
+
+        started_at = (
+            datetime.now(timezone.utc)
+            .isoformat()
+        )
+
+        self.db.create_run(
+            self.run_id,
+            started_at,
+            self.secrets.hms_url,
+            self.secrets.environment,
+        )
+
+        self.logger.info(
+            "=== HMS AI QA Agent — run %s ===",
+            self.run_id,
+        )
+
+        self.logger.info(
+            "Target: %s (environment=%s)",
+            self.secrets.hms_url,
+            self.secrets.environment,
+        )
+
+        # ------------------------------------------------------------
+        # Mutation safety
+        # ------------------------------------------------------------
+
+        if not self.config.testing.allow_mutations:
+
+            self.logger.info(
+                "Mutation testing disabled. "
+                "Safe/read-only testing mode is active."
+            )
+
+        if not self.secrets.is_mutation_allowed_environment():
+
+            self.logger.warning(
+                "HMS_ENVIRONMENT=%s — "
+                "destructive/mutating tests remain "
+                "force-disabled.",
+                self.secrets.environment,
+            )
+
+        # ------------------------------------------------------------
+        # Ollama health
+        # ------------------------------------------------------------
+
+        ollama_ok = await self.ollama.health_check()
+        # Stored so _test_and_analyze() can skip guaranteed-to-fail
+        # root-cause analysis calls if Ollama was already unreachable here.
+        self.ollama_ok = ollama_ok
+
+        if ollama_ok:
+
+            self.logger.info(
+                "Ollama reachable at %s (model=%s).",
+                self.secrets.ollama_host,
+                self.secrets.ollama_model,
+            )
+
+        else:
+
+            self.logger.warning(
+                "Ollama not reachable at %s — "
+                "continuing without LLM-assisted analysis.",
+                self.secrets.ollama_host,
+            )
+
+        # ------------------------------------------------------------
+        # Browser
+        # ------------------------------------------------------------
+
+        browser = BrowserManager(
+            headless=self.config.browser.headless,
+            viewport={
+                "width": self.config.browser.viewport.width,
+                "height": self.config.browser.viewport.height,
+            },
+            navigation_timeout_ms=(
+                self.config.browser.navigation_timeout_ms
+            ),
+            action_timeout_ms=(
+                self.config.browser.action_timeout_ms
+            ),
+        )
+
+        await browser.start()
+
+        status = "failed"
+
+        try:
+
+            # --------------------------------------------------------
+            # LOGIN
+            # --------------------------------------------------------
+
+            login_ok = await self._login(
+                browser
+            )
+
+            if not login_ok:
+
+                self.logger.error(
+                    "Login could not be verified. "
+                    "Aborting run."
+                )
+
+                status = "login_failed"
+
+            else:
+
+                # ----------------------------------------------------
+                # DISCOVERY
+                # ----------------------------------------------------
+
+                pages = await self._discover(
+                    browser
+                )
+
+                # ----------------------------------------------------
+                # TESTING
+                # ----------------------------------------------------
+
+                tests, bugs, dataflow_results = (
+                    await self._test_and_analyze(
+                        browser,
+                        pages,
+                    )
+                )
+
+                # ----------------------------------------------------
+                # REPORTS
+                # ----------------------------------------------------
+
+                self._write_reports(bugs, dataflow_results)
+
+                status = "completed"
+
+        except Exception as exc:
+
+            self.logger.exception(
+                "Unhandled error during QA run: %s",
+                exc,
+            )
+
+            status = "failed"
+
+        finally:
+
+            await browser.close()
+
+            finished_at = (
+                datetime.now(timezone.utc)
+                .isoformat()
+            )
+
+            self.db.finish_run(
+                self.run_id,
+                finished_at,
+                status,
+            )
+
+            self.db.close()
+
+        return {
+            "run_id": self.run_id,
+            "status": status,
+            "report_dir": str(self.run_dir),
+        }
+
+    # ================================================================
+    # LOGIN
+    # ================================================================
+
+    async def _login(
+        self,
+        browser: BrowserManager,
+    ) -> bool:
+
+        await browser.goto(
+            self.secrets.hms_url
+        )
+
+        pre_login_url = browser.page.url
+
+        form_found = (
+            await browser.detect_and_fill_login(
+                self.secrets.hms_email,
+                self.secrets.hms_password,
+            )
+        )
+
+        if not form_found:
+
+            self.logger.info(
+                "No login form detected — "
+                "assuming already authenticated "
+                "or no authentication required."
+            )
+
+            return True
+
+        ok = await browser.verify_login_success(
+            pre_login_url
+        )
+
+        self.logger.info(
+            "Login %s.",
+            "verified" if ok else "could not be verified",
+        )
+
+        return ok
+
+    # ================================================================
+    # DISCOVERY
+    # ================================================================
+
+    async def _discover(
+        self,
+        browser: BrowserManager,
+    ):
+
+        discovery = DiscoveryAgent(
+            browser=browser,
+            base_url=self.secrets.hms_url,
+            max_pages=self.config.discovery.max_pages,
+            max_depth=self.config.discovery.max_depth,
+            screenshot_dir=str(
+                self.screenshots_dir
+            ),
+        )
+
+        pages = await discovery.crawl(
+            browser.page.url
+        )
+
+        # ------------------------------------------------------------
+        # Store discovered pages
+        # ------------------------------------------------------------
+
+        for page in pages:
+
+            self.db.add_page(
+                self.run_id,
+                {
+                    "url": page.url,
+                    "title": page.title,
+                    "depth": page.depth,
+                    "forms": page.forms,
+                    "links": page.links,
+                    "screenshot_path": (
+                        page.screenshot_path
+                    ),
+                },
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            )
+
+        self.logger.info(
+            "Discovery complete: %d pages found.",
+            len(pages),
+        )
+
+        # ------------------------------------------------------------
+        # Discovery statistics
+        # ------------------------------------------------------------
+
+        total_inputs = sum(
+            len(getattr(page, "inputs", []))
+            for page in pages
+        )
+
+        total_buttons = sum(
+            len(getattr(page, "buttons", []))
+            for page in pages
+        )
+
+        total_selects = sum(
+            len(getattr(page, "selects", []))
+            for page in pages
+        )
+
+        total_checkboxes = sum(
+            len(getattr(page, "checkboxes", []))
+            for page in pages
+        )
+
+        total_radios = sum(
+            len(getattr(page, "radios", []))
+            for page in pages
+        )
+
+        total_tables = sum(
+            len(getattr(page, "tables", []))
+            for page in pages
+        )
+
+        total_interactive = sum(
+            len(
+                getattr(
+                    page,
+                    "interactive_elements",
+                    [],
+                )
+            )
+            for page in pages
+        )
+
+        self.logger.info(
+            (
+                "Discovery elements: "
+                "inputs=%d, buttons=%d, selects=%d, "
+                "checkboxes=%d, radios=%d, tables=%d, "
+                "interactive=%d"
+            ),
+            total_inputs,
+            total_buttons,
+            total_selects,
+            total_checkboxes,
+            total_radios,
+            total_tables,
+            total_interactive,
+        )
+
+        return pages
+
+    # ================================================================
+    # TESTING + BUG ANALYSIS
+    # ================================================================
+
+    async def _test_and_analyze(
+        self,
+        browser: BrowserManager,
+        pages,
+    ):
+
+        functional = FunctionalAgent(
+            browser,
+            screenshot_dir=str(
+                self.screenshots_dir
+            ),
+        )
+
+        # ------------------------------------------------------------
+        # Phase 1 smoke tests
+        # ------------------------------------------------------------
+
+        smoke_tests = (
+            functional.generate_smoke_tests(
+                pages
+            )
+        )
+
+        # ------------------------------------------------------------
+        # Phase 2 safe functional audits
+        # ------------------------------------------------------------
+
+        functional_tests = (
+            functional.generate_functional_tests(
+                pages
+            )
+        )
+
+        # ------------------------------------------------------------
+        # Combine
+        # ------------------------------------------------------------
+
+        test_cases = (
+            smoke_tests
+            + functional_tests
+        )
+
+        # ------------------------------------------------------------
+        # Data-flow / persistence testing
+        #
+        # IMPORTANT:
+        # This remains disabled unless explicitly enabled in TEST.
+        # ------------------------------------------------------------
+
+        dataflow_enabled = (
+            self.secrets.environment.upper() == "TEST"
+            and getattr(
+                self.config.testing,
+                "allow_test_data_mutations",
+                False,
+            )
+        )
+
+        dataflow = DataFlowAgent(
+            browser,
+            screenshot_dir=str(self.screenshots_dir),
+            enabled=dataflow_enabled,
+        )
+
+        dataflow_results = []
+
+        if dataflow_enabled:
+            self.logger.info(
+                "Data-flow testing ENABLED for TEST environment."
+            )
+
+            for page in pages:
+                try:
+                    result = await dataflow.run_page(page.url)
+                    dataflow_results.append(result)
+
+                    self.logger.info(
+                        "Data-flow [%s] %s — %s",
+                        result.status.upper(),
+                        page.url,
+                        result.detail,
+                    )
+
+                except Exception as exc:
+                    self.logger.exception(
+                        "Data-flow test error on %s: %s",
+                        page.url,
+                        exc,
+                    )
+        else:
+            self.logger.info(
+                "Data-flow testing disabled. "
+                "No test data will be created or modified."
+            )
+
+        self.logger.info(
+            "Data-flow results: %d",
+            len(dataflow_results),
+        )
+
+        self.logger.info(
+            (
+                "Generated %d smoke test(s) + "
+                "%d functional test(s) = "
+                "%d total test(s)."
+            ),
+            len(smoke_tests),
+            len(functional_tests),
+            len(test_cases),
+        )
+
+        results = []
+        bugs = []
+
+        # ============================================================
+        # EXECUTE TESTS
+        # ============================================================
+
+        for index, test_case in enumerate(
+            test_cases,
+            start=1,
+        ):
+
+            self.logger.info(
+                "Running test [%d/%d]: %s",
+                index,
+                len(test_cases),
+                test_case.name,
+            )
+
+            try:
+
+                result = await functional.execute(
+                    test_case
+                )
+
+            except Exception as exc:
+
+                self.logger.exception(
+                    "Test execution crashed: %s",
+                    test_case.name,
+                )
+
+                from app.agents.functional.functional_agent import (
+                    TestResult,
+                )
+
+                result = TestResult(
+                    test_case=test_case,
+                    status="failed",
+                    detail=(
+                        "Test execution exception: "
+                        f"{exc}"
+                    ),
+                )
+
+            # --------------------------------------------------------
+            # FAILED TEST
+            # --------------------------------------------------------
+
+            if result.status == "failed":
+
+                self.logger.warning(
+                    "Test failed: %s",
+                    test_case.name,
+                )
+
+                confirmed, retry_results = (
+                    await reproduce_failure(
+                        functional,
+                        test_case,
+                        self.config.testing.max_retries_before_bug,
+                    )
+                )
+
+                final_result = (
+                    retry_results[-1]
+                    if retry_results
+                    else result
+                )
+
+                if retry_results:
+
+                    failed_retries = sum(
+                        1
+                        for retry in retry_results
+                        if retry.status == "failed"
+                    )
+
+                    reproducibility = (
+                        f"{failed_retries}/"
+                        f"{len(retry_results)} retries failed"
+                    )
+
+                else:
+
+                    reproducibility = (
+                        "not retried"
+                    )
+
+                # ----------------------------------------------------
+                # CONFIRMED BUG
+                # ----------------------------------------------------
+
+                if confirmed:
+
+                    bug = build_bug(
+                        final_result,
+                        reproducibility,
+                    )
+
+                    # NOTE: bugs are collected here only. They are
+                    # deduplicated and persisted to the DB in one pass
+                    # AFTER the full test loop (see BUG DEDUPLICATION
+                    # below), not immediately per-test, so that multiple
+                    # failing tests sharing the same underlying issue can
+                    # be merged into a single master bug before anything
+                    # is written.
+                    bugs.append(
+                        bug
+                    )
+
+                    result = final_result
+
+                # ----------------------------------------------------
+                # NOT REPRODUCIBLE
+                # ----------------------------------------------------
+
+                else:
+
+                    result = final_result
+
+                    result.detail = (
+                        (result.detail or "")
+                        + " "
+                        "(not reproducible on retry — "
+                        "not filed as a bug)"
+                    )
+
+            # --------------------------------------------------------
+            # STORE RESULT
+            # --------------------------------------------------------
+
+            results.append(
+                result
+            )
+
+            self.db.add_test(
+                self.run_id,
+                test_case.name,
+                test_case.category,
+                result.status,
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+                test_case.target_url,
+                result.detail,
+            )
+
+        # ============================================================
+        # BUG DEDUPLICATION
+        #
+        # Candidate bugs collected during the loop above are merged here:
+        # multiple failing tests that share the same module + test
+        # category + normalized failure signal become one master bug,
+        # with every occurrence preserved in that bug's `affected` list.
+        # Bugs are persisted to the DB only after this merge, so the
+        # stored bug count reflects distinct issues, not raw failures.
+        # ============================================================
+
+        bugs = deduplicate_bugs(bugs)
+
+        # ============================================================
+        # ROOT-CAUSE ANALYSIS (Slice 3, item 1)
+        #
+        # Runs AFTER deduplication so analysis happens once per distinct
+        # issue, not once per raw failing test. Capped to the top 10 bugs
+        # by severity to bound added latency. Ollama failures (unreachable,
+        # timeout, malformed response) are fully contained inside
+        # analyze_bugs() and never fail the run — the outer try/except
+        # here is defense-in-depth on top of that.
+        # ============================================================
+
+        try:
+            ordered_bugs = sort_bugs_by_severity(bugs)
+            analysis_counts = await analyze_bugs(
+                self.ollama,
+                ordered_bugs,
+                max_bugs=10,
+                ollama_reachable=getattr(self, "ollama_ok", False),
+            )
+            self.logger.info(
+                "Root-cause analysis (AI-assisted, max 10 bugs by severity): "
+                "%d analyzed, %d insufficient evidence, %d unavailable, %d skipped (cap).",
+                analysis_counts["analyzed"],
+                analysis_counts["insufficient"],
+                analysis_counts["unavailable"],
+                analysis_counts["skipped"],
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "Root-cause analysis batch failed unexpectedly (continuing without it): %s",
+                exc,
+            )
+
+        for bug in bugs:
+
+            self.db.add_bug(
+                self.run_id,
+                {
+                    "bug_ref": bug.bug_ref,
+                    "title": bug.title,
+                    "module": bug.module,
+                    "severity": bug.severity,
+                    "url": bug.url,
+                    "steps": bug.steps,
+                    "expected": bug.expected,
+                    "actual": bug.actual,
+                    "reproducibility": bug.reproducibility,
+                    "screenshot_path": bug.screenshot_path,
+                    "console_errors": bug.console_errors,
+                    "network_errors": bug.network_errors,
+                },
+                datetime.now(timezone.utc).isoformat(),
+            )
+
+            self.logger.warning(
+                "Bug confirmed: %s [%s] %s (%d occurrence(s) merged)",
+                bug.bug_ref,
+                bug.severity,
+                bug.title,
+                len(bug.affected),
+            )
+
+        # ============================================================
+        # FINAL STATISTICS
+        # ============================================================
+
+        passed = sum(
+            1
+            for result in results
+            if result.status == "passed"
+        )
+
+        failed = sum(
+            1
+            for result in results
+            if result.status == "failed"
+        )
+
+        skipped = sum(
+            1
+            for result in results
+            if result.status == "skipped"
+        )
+
+        self.logger.info(
+            (
+                "Testing complete: "
+                "%d passed, "
+                "%d failed, "
+                "%d skipped, "
+                "%d bug(s) confirmed."
+            ),
+            passed,
+            failed,
+            skipped,
+            len(bugs),
+        )
+
+        return results, bugs, dataflow_results
+
+    # ================================================================
+    # REPORTING
+    # ================================================================
+
+    def _write_reports(self, bugs=None, dataflow_results=None) -> None:
+
+        data = self.db.fetch_all(
+            self.run_id
+        )
+
+        # Bugs are serialized from the in-memory, already-deduplicated
+        # list (not re-fetched from the DB) so fields that only exist on
+        # the in-memory Bug object — affected occurrences, numeric
+        # reproducibility, root_cause/recommended_fix placeholders — reach
+        # the report. db.py itself is intentionally left unchanged.
+        serialized_bugs = [asdict(b) for b in (bugs or [])]
+
+        serialized_dataflow = []
+
+        for result in (dataflow_results or []):
+            if hasattr(result, "__dict__"):
+                serialized_dataflow.append(
+                    dict(result.__dict__)
+                )
+            elif isinstance(result, dict):
+                serialized_dataflow.append(result)
+
+        generate_reports(
+            self.run_dir,
+            data["run"],
+            data["pages"],
+            data["tests"],
+            serialized_bugs,
+            serialized_dataflow,
+        )
+
+        self.logger.info(
+            "Reports written to %s",
+            self.run_dir,
+        )
+
+===== FILE: app/reporting/report_generator.py =====
+"""Professional, concise HMS QA report generator.
+
+Produces:
+    report.json
+    report.csv
+    report.html
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from jinja2 import Template
+
+
+_HTML_TEMPLATE = Template(
+r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HMS QA Report — {{ run.id }}</title>
+
+<style>
+:root {
+  --bg:#f5f7fa;
+  --panel:#ffffff;
+  --text:#172033;
+  --muted:#697386;
+  --line:#e5e9f0;
+  --green:#16834b;
+  --red:#c93636;
+  --amber:#b7791f;
+  --blue:#2563eb;
+  --shadow:0 8px 30px rgba(20,30,50,.06);
+}
+
+* { box-sizing:border-box; }
+
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  line-height:1.45;
+}
+
+.container {
+  max-width:1400px;
+  margin:auto;
+  padding:32px;
+}
+
+header {
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:18px;
+  padding:28px;
+  box-shadow:var(--shadow);
+  margin-bottom:22px;
+}
+
+h1 {
+  margin:0 0 6px;
+  font-size:30px;
+  letter-spacing:-.03em;
+}
+
+h2 {
+  font-size:20px;
+  margin:0 0 18px;
+}
+
+h3 {
+  font-size:15px;
+  margin:0 0 8px;
+}
+
+.meta {
+  color:var(--muted);
+  font-size:13px;
+}
+
+.status {
+  display:inline-flex;
+  align-items:center;
+  padding:6px 11px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:700;
+  margin-top:14px;
+  text-transform:uppercase;
+}
+
+.status.pass {
+  color:var(--green);
+  background:#eaf8f0;
+}
+
+.status.warn {
+  color:var(--amber);
+  background:#fff6df;
+}
+
+.status.fail {
+  color:var(--red);
+  background:#fdecec;
+}
+
+.grid {
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:14px;
+  margin-bottom:22px;
+}
+
+.card {
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:18px;
+  box-shadow:var(--shadow);
+}
+
+.num {
+  font-size:28px;
+  font-weight:750;
+  letter-spacing:-.03em;
+}
+
+.label {
+  margin-top:3px;
+  color:var(--muted);
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.07em;
+}
+
+.green { color:var(--green); }
+.red { color:var(--red); }
+.amber { color:var(--amber); }
+.blue { color:var(--blue); }
+
+section {
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:22px;
+  margin-bottom:18px;
+  box-shadow:var(--shadow);
+}
+
+.summary-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:18px;
+}
+
+.score {
+  font-size:48px;
+  font-weight:800;
+  letter-spacing:-.05em;
+}
+
+.progress {
+  height:9px;
+  background:#edf0f5;
+  border-radius:99px;
+  overflow:hidden;
+  margin-top:10px;
+}
+
+.progress > div {
+  height:100%;
+  background:var(--green);
+}
+
+table {
+  width:100%;
+  border-collapse:collapse;
+}
+
+th,td {
+  text-align:left;
+  padding:10px 11px;
+  border-bottom:1px solid var(--line);
+  font-size:13px;
+  vertical-align:top;
+}
+
+th {
+  color:var(--muted);
+  background:#fafbfc;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.05em;
+}
+
+tr:last-child td {
+  border-bottom:0;
+}
+
+.badge {
+  display:inline-block;
+  padding:4px 8px;
+  border-radius:7px;
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.badge.pass {
+  background:#eaf8f0;
+  color:var(--green);
+}
+
+.badge.fail {
+  background:#fdecec;
+  color:var(--red);
+}
+
+.badge.skip {
+  background:#f1f3f6;
+  color:#697386;
+}
+
+.badge.warn {
+  background:#fff6df;
+  color:var(--amber);
+}
+
+.code {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;
+  word-break:break-all;
+}
+
+ul {
+  margin:8px 0 0 18px;
+  padding:0;
+}
+
+.muted {
+  color:var(--muted);
+}
+
+.alert {
+  padding:13px 15px;
+  border-radius:10px;
+  margin-bottom:9px;
+  background:#f8fafc;
+  border:1px solid var(--line);
+}
+
+footer {
+  color:var(--muted);
+  text-align:center;
+  font-size:11px;
+  padding:10px;
+}
+
+@media(max-width:900px) {
+  .grid { grid-template-columns:repeat(2,1fr); }
+  .summary-grid { grid-template-columns:1fr; }
+}
+
+@media(max-width:600px) {
+  .container { padding:15px; }
+  .grid { grid-template-columns:1fr 1fr; }
+  table { display:block; overflow-x:auto; }
+}
+
+.bug-card {
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:18px;
+  margin-bottom:16px;
+  background:#fdfdfe;
+}
+
+.bug-card-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+
+.bug-card-head h3 {
+  margin:0;
+  font-size:16px;
+}
+
+.bug-card h4 {
+  font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:.05em;
+  color:var(--muted);
+  margin:14px 0 6px;
+}
+
+table.bug-fields {
+  margin-bottom:6px;
+}
+
+table.bug-fields th {
+  width:180px;
+  background:transparent;
+  text-transform:none;
+  letter-spacing:normal;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.evidence-shot {
+  max-width:100%;
+  border:1px solid var(--line);
+  border-radius:10px;
+  margin-top:4px;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<header>
+  <h1>HMS QA Report</h1>
+  <div class="meta">
+    Run <span class="code">{{ run.id }}</span>
+    · {{ run.hms_url }}
+    · Environment: <strong>{{ run.environment }}</strong>
+  </div>
+
+  <div class="meta">
+    Started: {{ run.started_at }}
+    {% if run.finished_at %}
+    · Finished: {{ run.finished_at }}
+    {% endif %}
+  </div>
+
+  <div class="status {{ overall_class }}">
+    {{ overall_status }}
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <div class="num">{{ tests|length }}</div>
+    <div class="label">Tests</div>
+  </div>
+
+  <div class="card">
+    <div class="num green">{{ passed_count }}</div>
+    <div class="label">Passed</div>
+  </div>
+
+  <div class="card">
+    <div class="num red">{{ failed_count }}</div>
+    <div class="label">Failed</div>
+  </div>
+
+  <div class="card">
+    <div class="num blue">{{ pages|length }}</div>
+    <div class="label">Pages</div>
+  </div>
+
+  <div class="card">
+    <div class="num {% if bugs|length %}red{% else %}green{% endif %}">
+      {{ bugs|length }}
+    </div>
+    <div class="label">Confirmed Bugs</div>
+  </div>
+</div>
+
+<section>
+  <h2>Executive Summary</h2>
+
+  <div class="summary-grid">
+    <div>
+      <h3>Quality Score</h3>
+      <div class="score">{{ quality_score }}%</div>
+      <div class="progress">
+        <div style="width:{{ quality_score }}%"></div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Coverage</h3>
+      <ul>
+        <li>{{ pages|length }} pages discovered</li>
+        <li>{{ tests|length }} tests executed</li>
+        <li>{{ passed_count }} passed</li>
+        <li>{{ failed_count }} failed</li>
+        <li>{{ bugs|length }} confirmed bugs</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Run Configuration</h2>
+
+  <table>
+    <tr><th>Environment</th><td>{{ run.environment }}</td></tr>
+    <tr><th>Target</th><td class="code">{{ run.hms_url }}</td></tr>
+    <tr><th>Run ID</th><td class="code">{{ run.id }}</td></tr>
+    <tr><th>Started</th><td>{{ run.started_at }}</td></tr>
+    <tr><th>Finished</th><td>{{ run.finished_at or "—" }}</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>Bug Summary</h2>
+
+  {% if bugs %}
+  <table>
+    <tr>
+      <th>Bug ID</th>
+      <th>Severity</th>
+      <th>Module</th>
+      <th>Title</th>
+      <th>Occurrences</th>
+      <th>Status</th>
+    </tr>
+
+    {% for b in bugs %}
+    <tr>
+      <td class="code">{{ b.bug_ref }}</td>
+      <td>
+        <span class="badge fail">{{ b.severity }}</span>
+      </td>
+      <td>{{ b.module }}</td>
+      <td>{{ b.title }}</td>
+      <td>{{ b.affected|length if b.affected else 1 }}</td>
+      <td><span class="badge fail">Confirmed</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="alert">
+    <strong>No confirmed bugs.</strong>
+    <span class="muted">No reproducible defect was confirmed during this run.</span>
+  </div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Detailed Bug Reports</h2>
+
+  {% if bugs %}
+    {% for b in bugs %}
+    <div class="bug-card">
+      <div class="bug-card-head">
+        <h3>{{ b.bug_ref }} — {{ b.title }}</h3>
+        <span class="badge fail">{{ b.severity }}</span>
+      </div>
+
+      <table class="bug-fields">
+        <tr><th>Page / Module</th><td>{{ b.module }}</td></tr>
+        <tr><th>URL</th><td class="code">{{ b.url }}</td></tr>
+        <tr><th>What was tested</th><td>{{ b.what_was_tested or b.title }}</td></tr>
+      </table>
+
+      <h4>Steps to reproduce</h4>
+      {% if b.steps %}
+      <ol>
+        {% for step in b.steps %}
+        <li>{{ step }}</li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <div class="alert muted">Not available.</div>
+      {% endif %}
+
+      <table class="bug-fields">
+        <tr><th>Expected</th><td>{{ b.expected or "Not available." }}</td></tr>
+        <tr><th>Actual</th><td>{{ b.actual or "Not available." }}</td></tr>
+      </table>
+
+      <h4>Technical evidence</h4>
+      <table class="bug-fields">
+        <tr>
+          <th>Console</th>
+          <td>
+            {% if b.console_errors %}
+              <ul>{% for c in b.console_errors %}<li class="code">{{ c }}</li>{% endfor %}</ul>
+            {% else %}
+              <span class="muted">Not captured.</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>Network / API</th>
+          <td>
+            {% if b.network_errors %}
+              <ul>{% for n in b.network_errors %}<li class="code">{{ n }}</li>{% endfor %}</ul>
+            {% else %}
+              <span class="muted">Not captured.</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr><th>HTTP status</th><td><span class="muted">Not captured.</span></td></tr>
+        <tr><th>Response timing</th><td><span class="muted">Not captured.</span></td></tr>
+        <tr>
+          <th>Reproducibility</th>
+          <td>
+            {% if b.reproducibility_pct is not none %}
+              {{ b.reproducibility_pct }}% <span class="muted">({{ b.reproducibility }})</span>
+            {% else %}
+              {{ b.reproducibility or "Not available." }}
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+
+      <h4>Screenshot</h4>
+      {% if b.screenshot_rel %}
+        <img class="evidence-shot" src="{{ b.screenshot_rel }}" alt="Evidence for {{ b.bug_ref }}">
+      {% else %}
+        <div class="alert muted">Not captured.</div>
+      {% endif %}
+
+      <h4>Affected pages / tests</h4>
+      {% if b.affected %}
+        <ul>
+          {% for occurrence in b.affected %}
+          <li><span class="code">{{ occurrence.url }}</span>{% if occurrence.detail %} — {{ occurrence.detail }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="alert muted">Not available.</div>
+      {% endif %}
+
+      <table class="bug-fields">
+        <tr><th>Root cause</th><td>{{ b.root_cause or "Not available — LLM-assisted analysis not yet implemented." }}</td></tr>
+        <tr><th>Recommended fix</th><td>{{ b.recommended_fix or "Not available — LLM-assisted analysis not yet implemented." }}</td></tr>
+      </table>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="alert">
+      <strong>No confirmed bugs.</strong>
+      <span class="muted">No reproducible defect was confirmed during this run.</span>
+    </div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Test Results</h2>
+
+  {% if tests %}
+  <table>
+    <tr>
+      <th>#</th>
+      <th>Name</th>
+      <th>Category</th>
+      <th>Status</th>
+      <th>Detail</th>
+    </tr>
+
+    {% for t in tests %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ t.name }}</td>
+      <td>{{ t.category }}</td>
+      <td>
+        <span class="badge
+          {% if t.status == 'passed' %}pass
+          {% elif t.status == 'failed' %}fail
+          {% else %}skip{% endif %}">
+          {{ t.status }}
+        </span>
+      </td>
+      <td>{{ t.detail or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="alert">No tests recorded.</div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Application Coverage</h2>
+
+  <table>
+    <tr>
+      <th>Page</th>
+      <th>Depth</th>
+      <th>Forms</th>
+      <th>Links</th>
+      <th>Elements</th>
+    </tr>
+
+    {% for p in pages %}
+    <tr>
+      <td>
+        <strong>{{ p.title or "Untitled" }}</strong><br>
+        <span class="code muted">{{ p.url }}</span>
+      </td>
+      <td>{{ p.depth }}</td>
+      <td>{{ p.form_count }}</td>
+      <td>{{ p.link_count }}</td>
+      <td>
+        {% if p.interactive_count is defined %}
+          {{ p.interactive_count }}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h2>Data Flow & Persistence</h2>
+
+  {% if dataflow %}
+    <table>
+      <tr>
+        <th>URL</th>
+        <th>Status</th>
+        <th>Detail</th>
+        <th>Persistence</th>
+      </tr>
+
+      {% for d in dataflow %}
+      <tr>
+        <td class="code">{{ d.url }}</td>
+        <td>
+          <span class="badge
+            {% if d.status == 'passed' %}pass
+            {% elif d.status == 'failed' %}fail
+            {% else %}skip{% endif %}">
+            {{ d.status }}
+          </span>
+        </td>
+        <td>{{ d.detail }}</td>
+        <td>
+          {% if d.persistence_checks %}
+            {% for key,value in d.persistence_checks.items() %}
+              <div>{{ key }}: <strong>{{ value }}</strong></div>
+            {% endfor %}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="alert">
+      Data-flow results were not recorded for this run.
+      <span class="muted">
+        This section does not invent or infer results.
+      </span>
+    </div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Evidence & Diagnostics</h2>
+
+  {% set error_count = namespace(value=0) %}
+  {% set request_count = namespace(value=0) %}
+
+  {% for t in tests %}
+    {% if t.console_errors %}
+      {% set error_count.value = error_count.value + (t.console_errors|length) %}
+    {% endif %}
+    {% if t.failed_requests %}
+      {% set request_count.value = request_count.value + (t.failed_requests|length) %}
+    {% endif %}
+  {% endfor %}
+
+  <table>
+    <tr><th>Diagnostic</th><th>Count</th></tr>
+    <tr><td>Console errors</td><td>{{ error_count.value }}</td></tr>
+    <tr><td>Failed network requests</td><td>{{ request_count.value }}</td></tr>
+    <tr><td>Pages with screenshots</td><td>{{ screenshot_count }}</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>Recommended Actions</h2>
+
+  {% if bugs %}
+    <div class="alert">
+      <strong>Priority:</strong>
+      Review and reproduce the confirmed bugs listed above.
+    </div>
+  {% endif %}
+
+  {% if failed_count %}
+    <div class="alert">
+      <strong>Functional failures:</strong>
+      Review failed tests and their evidence before release.
+    </div>
+  {% endif %}
+
+  {% if not bugs and not failed_count %}
+    <div class="alert">
+      <strong>No confirmed functional defects in this run.</strong>
+      Continue expanding coverage for deeper workflows and edge cases.
+    </div>
+  {% endif %}
+</section>
+
+<footer>
+  HMS AI QA Agent · Automated test evidence · {{ run.id }}
+</footer>
+
+</div>
+</body>
+</html>
+"""
+)
+
+
+def _relative_screenshot(output_dir: Path, screenshot_path: Optional[str]) -> Optional[str]:
+    """Return a path relative to output_dir suitable for an <img src>, or
+    None if there's no screenshot path or it isn't under output_dir.
+    Never fabricates or guesses a path."""
+    if not screenshot_path:
+        return None
+    try:
+        p = Path(screenshot_path)
+        if p.is_absolute():
+            return str(p.relative_to(output_dir))
+        return screenshot_path
+    except ValueError:
+        return None
+
+
+def _quality_score(
+    tests: List[Dict[str, Any]],
+    bugs: List[Dict[str, Any]],
+) -> int:
+    if not tests:
+        return 0
+
+    passed = sum(
+        1 for t in tests
+        if t.get("status") == "passed"
+    )
+
+    base = (passed / len(tests)) * 100
+
+    # Small penalty for confirmed bugs.
+    penalty = min(len(bugs) * 5, 30)
+
+    return max(0, min(100, round(base - penalty)))
+
+
+def _overall_status(
+    tests: List[Dict[str, Any]],
+    bugs: List[Dict[str, Any]],
+) -> tuple[str, str]:
+
+    if any(
+        str(b.get("severity", "")).upper()
+        in {"P0", "CRITICAL"}
+        for b in bugs
+    ):
+        return "FAIL", "fail"
+
+    if bugs or any(
+        t.get("status") == "failed"
+        for t in tests
+    ):
+        return "WARNING", "warn"
+
+    if not tests:
+        return "WARNING", "warn"
+
+    return "PASS", "pass"
+
+
+def generate_reports(
+    output_dir: Path,
+    run: Dict[str, Any],
+    pages: List[Dict],
+    tests: List[Dict],
+    bugs: List[Dict],
+    dataflow: List[Dict[str, Any]] | None = None,
+) -> None:
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    dataflow = dataflow or []
+
+    # Attach a report-relative screenshot path to each bug so the HTML
+    # template can embed it directly. Does not touch screenshot_path
+    # itself — that stays exactly as captured by the test engine.
+    for b in bugs:
+        b["screenshot_rel"] = _relative_screenshot(output_dir, b.get("screenshot_path"))
+
+    passed_count = sum(
+        1 for t in tests
+        if t.get("status") == "passed"
+    )
+
+    failed_count = sum(
+        1 for t in tests
+        if t.get("status") == "failed"
+    )
+
+    quality_score = _quality_score(
+        tests,
+        bugs,
+    )
+
+    overall_status, overall_class = _overall_status(
+        tests,
+        bugs,
+    )
+
+    screenshot_count = sum(
+        1 for p in pages
+        if p.get("screenshot_path")
+    )
+
+    report_data = {
+        "run": run,
+        "summary": {
+            "overall_status": overall_status,
+            "quality_score": quality_score,
+            "total_tests": len(tests),
+            "passed": passed_count,
+            "failed": failed_count,
+            "pass_rate": (
+                round(
+                    passed_count / len(tests),
+                    4,
+                )
+                if tests
+                else None
+            ),
+            "pages_discovered": len(pages),
+            "bugs_confirmed": len(bugs),
+            "screenshots": screenshot_count,
+        },
+        "pages": pages,
+        "tests": tests,
+        "bugs": bugs,
+        "dataflow": dataflow,
+    }
+
+    (
+        output_dir / "report.json"
+    ).write_text(
+        json.dumps(
+            report_data,
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+
+    with open(
+        output_dir / "report.csv",
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as fh:
+
+        writer = csv.writer(fh)
+
+        writer.writerow(
+            [
+                "type",
+                "name_or_url",
+                "category_or_module",
+                "status_or_severity",
+                "detail",
+            ]
+        )
+
+        for t in tests:
+            writer.writerow(
+                [
+                    "test",
+                    t.get("name"),
+                    t.get("category"),
+                    t.get("status"),
+                    t.get("detail") or "",
+                ]
+            )
+
+        for b in bugs:
+            writer.writerow(
+                [
+                    "bug",
+                    b.get("title"),
+                    b.get("module"),
+                    b.get("severity"),
+                    b.get("actual") or "",
+                ]
+            )
+
+        for d in dataflow:
+            writer.writerow(
+                [
+                    "dataflow",
+                    d.get("url"),
+                    "persistence",
+                    d.get("status"),
+                    d.get("detail") or "",
+                ]
+            )
+
+    html = _HTML_TEMPLATE.render(
+        run=run,
+        pages=pages,
+        tests=tests,
+        bugs=bugs,
+        dataflow=dataflow,
+        passed_count=passed_count,
+        failed_count=failed_count,
+        quality_score=quality_score,
+        overall_status=overall_status,
+        overall_class=overall_class,
+        screenshot_count=screenshot_count,
+    )
+
+    (
+        output_dir / "report.html"
+    ).write_text(
+        html,
+        encoding="utf-8",
+    )

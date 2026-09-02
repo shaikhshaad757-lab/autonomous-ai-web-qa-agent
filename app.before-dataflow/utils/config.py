@@ -1,0 +1,140 @@
+"""Configuration loading.
+
+Secrets (URL/credentials/Ollama host) come ONLY from environment variables
+(.env is loaded via python-dotenv for local convenience). Everything else
+(timeouts, limits, viewport size...) comes from config/config.yaml.
+
+Nothing in this module ever logs a secret value.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Dict, Optional
+
+import yaml
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field, field_validator
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class RoleCredential(BaseModel):
+    email: str
+    password: str
+
+
+class Secrets(BaseModel):
+    """Everything sensitive. Repr is overridden so it can never be
+    accidentally printed/logged with real values."""
+
+    hms_url: str
+    hms_email: str
+    hms_password: str
+    environment: str = Field(default="TEST")
+    role_credentials: Dict[str, RoleCredential] = Field(default_factory=dict)
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1"
+
+    @field_validator("environment")
+    @classmethod
+    def _norm_env(cls, v: str) -> str:
+        v = v.strip().upper()
+        if v not in {"TEST", "STAGING", "PRODUCTION"}:
+            raise ValueError("HMS_ENVIRONMENT must be TEST, STAGING, or PRODUCTION")
+        return v
+
+    def __repr__(self) -> str:  # never leak secrets via repr/print/logging
+        return f"Secrets(hms_url={self.hms_url!r}, environment={self.environment!r}, email=<masked>, password=<masked>)"
+
+    __str__ = __repr__
+
+    def is_mutation_allowed_environment(self) -> bool:
+        return self.environment in {"TEST", "STAGING"}
+
+
+class DiscoveryConfig(BaseModel):
+    max_pages: int = 40
+    max_depth: int = 4
+    crawl_timeout_seconds: int = 20
+
+
+class ViewportConfig(BaseModel):
+    width: int = 1440
+    height: int = 900
+
+
+class BrowserConfig(BaseModel):
+    headless: bool = True
+    viewport: ViewportConfig = ViewportConfig()
+    navigation_timeout_ms: int = 15000
+    action_timeout_ms: int = 8000
+
+
+class TestingConfig(BaseModel):
+    allow_mutations: bool = False
+    max_retries_before_bug: int = 2
+    screenshot_on_every_page: bool = True
+
+
+class ReportingConfig(BaseModel):
+    output_dir: str = "reports"
+
+
+class LLMConfig(BaseModel):
+    temperature: float = 0.2
+    max_tokens: int = 1024
+    request_timeout_seconds: int = 60
+
+
+class AppConfig(BaseModel):
+    discovery: DiscoveryConfig = DiscoveryConfig()
+    browser: BrowserConfig = BrowserConfig()
+    testing: TestingConfig = TestingConfig()
+    reporting: ReportingConfig = ReportingConfig()
+    llm: LLMConfig = LLMConfig()
+
+
+def load_secrets(env_file: Optional[Path] = None) -> Secrets:
+    load_dotenv(dotenv_path=env_file or (PROJECT_ROOT / ".env"))
+
+    missing = [
+        name
+        for name in ("HMS_URL", "HMS_EMAIL", "HMS_PASSWORD")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: "
+            + ", ".join(missing)
+            + ". Copy .env.example to .env and fill it in."
+        )
+
+    role_creds_raw = os.environ.get("HMS_ROLE_CREDENTIALS", "").strip()
+    role_credentials = {}
+    if role_creds_raw:
+        try:
+            parsed = json.loads(role_creds_raw)
+            role_credentials = {k: RoleCredential(**v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"HMS_ROLE_CREDENTIALS is not valid JSON: {exc}") from exc
+
+    return Secrets(
+        hms_url=os.environ["HMS_URL"],
+        hms_email=os.environ["HMS_EMAIL"],
+        hms_password=os.environ["HMS_PASSWORD"],
+        environment=os.environ.get("HMS_ENVIRONMENT", "TEST"),
+        role_credentials=role_credentials,
+        ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+        ollama_model=os.environ.get("OLLAMA_MODEL", "llama3.1"),
+    )
+
+
+def load_app_config(config_file: Optional[Path] = None) -> AppConfig:
+    path = config_file or (PROJECT_ROOT / "config" / "config.yaml")
+    if not path.exists():
+        return AppConfig()
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh) or {}
+    return AppConfig(**raw)

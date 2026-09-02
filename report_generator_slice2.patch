@@ -1,0 +1,250 @@
+--- app/reporting/report_generator.py.slice2backup.20260820_115449	2026-08-20 11:54:49.928957642 +0000
++++ app/reporting/report_generator.py	2026-08-20 11:56:06.864213487 +0000
+@@ -11,7 +11,7 @@
+ import csv
+ import json
+ from pathlib import Path
+-from typing import Any, Dict, List
++from typing import Any, Dict, List, Optional
+ 
+ from jinja2 import Template
+ 
+@@ -272,6 +272,55 @@
+   .grid { grid-template-columns:1fr 1fr; }
+   table { display:block; overflow-x:auto; }
+ }
++
++.bug-card {
++  border:1px solid var(--line);
++  border-radius:14px;
++  padding:18px;
++  margin-bottom:16px;
++  background:#fdfdfe;
++}
++
++.bug-card-head {
++  display:flex;
++  align-items:center;
++  justify-content:space-between;
++  gap:10px;
++  margin-bottom:10px;
++}
++
++.bug-card-head h3 {
++  margin:0;
++  font-size:16px;
++}
++
++.bug-card h4 {
++  font-size:12px;
++  text-transform:uppercase;
++  letter-spacing:.05em;
++  color:var(--muted);
++  margin:14px 0 6px;
++}
++
++table.bug-fields {
++  margin-bottom:6px;
++}
++
++table.bug-fields th {
++  width:180px;
++  background:transparent;
++  text-transform:none;
++  letter-spacing:normal;
++  font-size:12px;
++  color:var(--muted);
++}
++
++.evidence-shot {
++  max-width:100%;
++  border:1px solid var(--line);
++  border-radius:10px;
++  margin-top:4px;
++}
+ </style>
+ </head>
+ 
+@@ -365,29 +414,29 @@
+ </section>
+ 
+ <section>
+-  <h2>Confirmed Bugs</h2>
++  <h2>Bug Summary</h2>
+ 
+   {% if bugs %}
+   <table>
+     <tr>
+-      <th>ID</th>
+-      <th>Title</th>
+-      <th>Module</th>
++      <th>Bug ID</th>
+       <th>Severity</th>
+-      <th>URL</th>
+-      <th>Reproducibility</th>
++      <th>Module</th>
++      <th>Title</th>
++      <th>Occurrences</th>
++      <th>Status</th>
+     </tr>
+ 
+     {% for b in bugs %}
+     <tr>
+       <td class="code">{{ b.bug_ref }}</td>
+-      <td>{{ b.title }}</td>
+-      <td>{{ b.module }}</td>
+       <td>
+         <span class="badge fail">{{ b.severity }}</span>
+       </td>
+-      <td class="code">{{ b.url }}</td>
+-      <td>{{ b.reproducibility }}</td>
++      <td>{{ b.module }}</td>
++      <td>{{ b.title }}</td>
++      <td>{{ b.affected|length if b.affected else 1 }}</td>
++      <td><span class="badge fail">Confirmed</span></td>
+     </tr>
+     {% endfor %}
+   </table>
+@@ -400,6 +449,107 @@
+ </section>
+ 
+ <section>
++  <h2>Detailed Bug Reports</h2>
++
++  {% if bugs %}
++    {% for b in bugs %}
++    <div class="bug-card">
++      <div class="bug-card-head">
++        <h3>{{ b.bug_ref }} — {{ b.title }}</h3>
++        <span class="badge fail">{{ b.severity }}</span>
++      </div>
++
++      <table class="bug-fields">
++        <tr><th>Page / Module</th><td>{{ b.module }}</td></tr>
++        <tr><th>URL</th><td class="code">{{ b.url }}</td></tr>
++        <tr><th>What was tested</th><td>{{ b.what_was_tested or b.title }}</td></tr>
++      </table>
++
++      <h4>Steps to reproduce</h4>
++      {% if b.steps %}
++      <ol>
++        {% for step in b.steps %}
++        <li>{{ step }}</li>
++        {% endfor %}
++      </ol>
++      {% else %}
++      <div class="alert muted">Not available.</div>
++      {% endif %}
++
++      <table class="bug-fields">
++        <tr><th>Expected</th><td>{{ b.expected or "Not available." }}</td></tr>
++        <tr><th>Actual</th><td>{{ b.actual or "Not available." }}</td></tr>
++      </table>
++
++      <h4>Technical evidence</h4>
++      <table class="bug-fields">
++        <tr>
++          <th>Console</th>
++          <td>
++            {% if b.console_errors %}
++              <ul>{% for c in b.console_errors %}<li class="code">{{ c }}</li>{% endfor %}</ul>
++            {% else %}
++              <span class="muted">Not captured.</span>
++            {% endif %}
++          </td>
++        </tr>
++        <tr>
++          <th>Network / API</th>
++          <td>
++            {% if b.network_errors %}
++              <ul>{% for n in b.network_errors %}<li class="code">{{ n }}</li>{% endfor %}</ul>
++            {% else %}
++              <span class="muted">Not captured.</span>
++            {% endif %}
++          </td>
++        </tr>
++        <tr><th>HTTP status</th><td><span class="muted">Not captured.</span></td></tr>
++        <tr><th>Response timing</th><td><span class="muted">Not captured.</span></td></tr>
++        <tr>
++          <th>Reproducibility</th>
++          <td>
++            {% if b.reproducibility_pct is not none %}
++              {{ b.reproducibility_pct }}% <span class="muted">({{ b.reproducibility }})</span>
++            {% else %}
++              {{ b.reproducibility or "Not available." }}
++            {% endif %}
++          </td>
++        </tr>
++      </table>
++
++      <h4>Screenshot</h4>
++      {% if b.screenshot_rel %}
++        <img class="evidence-shot" src="{{ b.screenshot_rel }}" alt="Evidence for {{ b.bug_ref }}">
++      {% else %}
++        <div class="alert muted">Not captured.</div>
++      {% endif %}
++
++      <h4>Affected pages / tests</h4>
++      {% if b.affected %}
++        <ul>
++          {% for occurrence in b.affected %}
++          <li><span class="code">{{ occurrence.url }}</span>{% if occurrence.detail %} — {{ occurrence.detail }}{% endif %}</li>
++          {% endfor %}
++        </ul>
++      {% else %}
++        <div class="alert muted">Not available.</div>
++      {% endif %}
++
++      <table class="bug-fields">
++        <tr><th>Root cause</th><td>{{ b.root_cause or "Not available — LLM-assisted analysis not yet implemented." }}</td></tr>
++        <tr><th>Recommended fix</th><td>{{ b.recommended_fix or "Not available — LLM-assisted analysis not yet implemented." }}</td></tr>
++      </table>
++    </div>
++    {% endfor %}
++  {% else %}
++    <div class="alert">
++      <strong>No confirmed bugs.</strong>
++      <span class="muted">No reproducible defect was confirmed during this run.</span>
++    </div>
++  {% endif %}
++</section>
++
++<section>
+   <h2>Test Results</h2>
+ 
+   {% if tests %}
+@@ -572,6 +722,21 @@
+ )
+ 
+ 
++def _relative_screenshot(output_dir: Path, screenshot_path: Optional[str]) -> Optional[str]:
++    """Return a path relative to output_dir suitable for an <img src>, or
++    None if there's no screenshot path or it isn't under output_dir.
++    Never fabricates or guesses a path."""
++    if not screenshot_path:
++        return None
++    try:
++        p = Path(screenshot_path)
++        if p.is_absolute():
++            return str(p.relative_to(output_dir))
++        return screenshot_path
++    except ValueError:
++        return None
++
++
+ def _quality_score(
+     tests: List[Dict[str, Any]],
+     bugs: List[Dict[str, Any]],
+@@ -632,6 +797,12 @@
+ 
+     dataflow = dataflow or []
+ 
++    # Attach a report-relative screenshot path to each bug so the HTML
++    # template can embed it directly. Does not touch screenshot_path
++    # itself — that stays exactly as captured by the test engine.
++    for b in bugs:
++        b["screenshot_rel"] = _relative_screenshot(output_dir, b.get("screenshot_path"))
++
+     passed_count = sum(
+         1 for t in tests
+         if t.get("status") == "passed"

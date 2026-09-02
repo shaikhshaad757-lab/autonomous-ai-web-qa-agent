@@ -1,0 +1,109 @@
+--- app/agents/analyzer/bug_analyzer.py.slice2backup.20260820_115449	2026-08-20 11:54:49.922979866 +0000
++++ app/agents/analyzer/bug_analyzer.py	2026-08-20 11:55:11.584516001 +0000
+@@ -41,6 +41,18 @@
+     # Stable signature used ONLY for dedup grouping — not persisted/reported
+     # verbatim, just used to decide which bugs represent the same issue.
+     signature: str = ""
++    # Numeric reproducibility, parsed from `reproducibility` where possible
++    # (e.g. "3/3 retries failed" -> 100). None when it can't be parsed
++    # (e.g. "not retried") — never guessed.
++    reproducibility_pct: Optional[int] = None
++    # Root cause / recommended fix: intentionally None until an
++    # LLM-assisted analysis pass exists. The report renders these as
++    # "Not available" rather than inventing anything.
++    root_cause: Optional[str] = None
++    recommended_fix: Optional[str] = None
++    # Short, human-readable description of what this test actually
++    # checked, derived only from existing TestCase data.
++    what_was_tested: str = ""
+ 
+ 
+ def _guess_module(url: str) -> str:
+@@ -160,6 +172,67 @@
+     return True, results
+ 
+ 
++def _parse_reproducibility_pct(reproducibility: str) -> Optional[int]:
++    """Parse a numeric reproducibility percentage from strings like
++    '3/3 retries failed' -> 100. Returns None for non-numeric forms
++    (e.g. 'not retried') rather than guessing a value."""
++    match = re.match(r"(\d+)\s*/\s*(\d+)", reproducibility or "")
++    if not match:
++        return None
++    numerator, denominator = int(match.group(1)), int(match.group(2))
++    if denominator == 0:
++        return None
++    return round((numerator / denominator) * 100)
++
++
++def _what_was_tested(result: TestResult) -> str:
++    """Human-readable description of what this test actually checked,
++    taken directly from the TestCase's own name — never invented."""
++    return result.test_case.name
++
++
++def _reproduction_steps(result: TestResult) -> List[str]:
++    """Build a concrete 3-step reproduction procedure from the TestCase's
++    own data (category / element type / field name, where present) and
++    what was actually observed in the result. Uses getattr() defensively
++    since TestCase's optional fields (element_type, test_data) may or may
++    not be populated depending on test category — never invents behavior
++    that wasn't actually captured."""
++    tc = result.test_case
++    category = getattr(tc, "category", "") or ""
++    element_type = getattr(tc, "element_type", None)
++    test_data = getattr(tc, "test_data", None) or {}
++    field_name = test_data.get("field_name") if isinstance(test_data, dict) else None
++
++    step1 = f"Navigate to {tc.target_url}"
++
++    if category == "smoke":
++        step2 = "Allow the page to load fully"
++    elif category == "deep_page_audit":
++        step2 = "Allow the page to render and run an automated DOM audit"
++    elif field_name and element_type:
++        step2 = f"Locate the {element_type} field '{field_name}' and inspect/interact with it"
++    elif element_type:
++        step2 = f"Locate and interact with the {element_type} element being audited"
++    elif field_name:
++        step2 = f"Locate the field '{field_name}'"
++    elif category:
++        step2 = f"Perform the '{category.replace('_', ' ')}' check on this page"
++    else:
++        step2 = "Perform the automated check on this page"
++
++    if result.failed_requests:
++        step3 = f"Observe the failed network request: {result.failed_requests[0]}"
++    elif result.console_errors:
++        step3 = f"Observe the console error: {result.console_errors[0]}"
++    elif result.detail:
++        step3 = f"Observe the result: {result.detail}"
++    else:
++        step3 = "Observe the failure"
++
++    return [step1, step2, step3]
++
++
+ def build_bug(result: TestResult, reproducibility: str) -> Bug:
+     ref = f"BUG-{next(_bug_counter):04d}"
+     return Bug(
+@@ -168,7 +241,7 @@
+         module=_guess_module(result.test_case.target_url),
+         severity=classify_severity(result),
+         url=result.test_case.target_url,
+-        steps=[f"Navigate to {result.test_case.target_url}", "Observe console/network errors"],
++        steps=_reproduction_steps(result),
+         expected="Page loads without console errors or failed network requests.",
+         actual=result.detail,
+         reproducibility=reproducibility,
+@@ -177,6 +250,10 @@
+         network_errors=result.failed_requests,
+         affected=[],
+         signature=_bug_signature(result),
++        reproducibility_pct=_parse_reproducibility_pct(reproducibility),
++        root_cause=None,
++        recommended_fix=None,
++        what_was_tested=_what_was_tested(result),
+     )
+ 
+ 

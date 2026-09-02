@@ -1,0 +1,598 @@
+{
+  "run": {
+    "id": "run_20260824_072729_5cdbfd",
+    "started_at": "2026-08-24T07:27:29.251708+00:00",
+    "finished_at": null,
+    "hms_url": "https://hakimtest.rayshreeayurveda.com/admin-login",
+    "environment": "TEST",
+    "status": "running"
+  },
+  "summary": {
+    "overall_status": "WARNING",
+    "quality_score": 49,
+    "total_tests": 45,
+    "passed": 22,
+    "failed": 21,
+    "pass_rate": 0.4889,
+    "pages_discovered": 11,
+    "bugs_confirmed": 0,
+    "screenshots": 11
+  },
+  "pages": [
+    {
+      "id": 1,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/welcome",
+      "title": "Rayshree Ayurveda",
+      "depth": 0,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"RayshreeAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_000.png",
+      "discovered_at": "2026-08-24T07:27:44.511897+00:00"
+    },
+    {
+      "id": 2,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"RayshreeAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_001.png",
+      "discovered_at": "2026-08-24T07:27:44.512706+00:00"
+    },
+    {
+      "id": 3,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/Nerovia",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"RayshreeAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_002.png",
+      "discovered_at": "2026-08-24T07:27:44.513244+00:00"
+    },
+    {
+      "id": 4,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "title": "Andro Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"AndroAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_003.png",
+      "discovered_at": "2026-08-24T07:27:44.513718+00:00"
+    },
+    {
+      "id": 5,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "title": "Andro Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"AndroAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_004.png",
+      "discovered_at": "2026-08-24T07:27:44.514229+00:00"
+    },
+    {
+      "id": 6,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "title": "Andro Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[{\"href\": \"https://hakimtest.rayshreeayurveda.com/\", \"text\": \"AndroAyurveda\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/Nerovia\", \"text\": \"Nerovia\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/dashboard\", \"text\": \"Dashboard\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/beds-management\", \"text\": \"Beds\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/rooms-management\", \"text\": \"Rooms\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/patients\", \"text\": \"Patients\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/finances\", \"text\": \"Finances\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/hrms\", \"text\": \"HRMS\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings\", \"text\": \"Settings\"}, {\"href\": \"https://hakimtest.rayshreeayurveda.com/settings/diet-management\", \"text\": \"Diet Plans\"}]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_005.png",
+      "discovered_at": "2026-08-24T07:27:44.514730+00:00"
+    },
+    {
+      "id": 7,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/patients",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_006.png",
+      "discovered_at": "2026-08-24T07:27:44.515183+00:00"
+    },
+    {
+      "id": 8,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/finances",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_007.png",
+      "discovered_at": "2026-08-24T07:27:44.515661+00:00"
+    },
+    {
+      "id": 9,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/hrms",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_008.png",
+      "discovered_at": "2026-08-24T07:27:44.516165+00:00"
+    },
+    {
+      "id": 10,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/settings",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_009.png",
+      "discovered_at": "2026-08-24T07:27:44.516600+00:00"
+    },
+    {
+      "id": 11,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "url": "https://hakimtest.rayshreeayurveda.com/settings/diet-management",
+      "title": "Rayshree Ayurveda",
+      "depth": 1,
+      "forms_json": "[]",
+      "links_json": "[]",
+      "screenshot_path": "/Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd/screenshots/page_010.png",
+      "discovered_at": "2026-08-24T07:27:44.517121+00:00"
+    }
+  ],
+  "tests": [
+    {
+      "id": 1,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/welcome",
+      "status": "failed",
+      "detail": "1 console error(s), 1 failed request(s)",
+      "executed_at": "2026-08-24T07:27:52.460264+00:00"
+    },
+    {
+      "id": 2,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/",
+      "status": "passed",
+      "detail": "Page loaded without captured failures.",
+      "executed_at": "2026-08-24T07:27:54.858848+00:00"
+    },
+    {
+      "id": 3,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/Nerovia",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:04.195822+00:00"
+    },
+    {
+      "id": 4,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Andro Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:13.546729+00:00"
+    },
+    {
+      "id": 5,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Andro Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:21.145592+00:00"
+    },
+    {
+      "id": 6,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Andro Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:28.742640+00:00"
+    },
+    {
+      "id": 7,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/patients",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:36.399933+00:00"
+    },
+    {
+      "id": 8,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/finances",
+      "status": "failed",
+      "detail": "1 console error(s), 1 failed request(s)",
+      "executed_at": "2026-08-24T07:28:44.864584+00:00"
+    },
+    {
+      "id": 9,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/hrms",
+      "status": "failed",
+      "detail": "1 console error(s), 2 failed request(s)",
+      "executed_at": "2026-08-24T07:28:52.287085+00:00"
+    },
+    {
+      "id": 10,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings",
+      "status": "failed",
+      "detail": "1 console error(s), 1 failed request(s)",
+      "executed_at": "2026-08-24T07:29:00.002216+00:00"
+    },
+    {
+      "id": 11,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Smoke: page loads cleanly \u2014 Rayshree Ayurveda",
+      "category": "smoke",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/diet-management",
+      "status": "failed",
+      "detail": "1 console error(s), 1 failed request(s)",
+      "executed_at": "2026-08-24T07:29:07.823933+00:00"
+    },
+    {
+      "id": 12,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/welcome",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=12, unnamed_interactive=2",
+      "executed_at": "2026-08-24T07:29:15.758298+00:00"
+    },
+    {
+      "id": 13,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/welcome",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:18.517897+00:00"
+    },
+    {
+      "id": 14,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/welcome",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:20.999940+00:00"
+    },
+    {
+      "id": 15,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=12, unnamed_interactive=2",
+      "executed_at": "2026-08-24T07:29:28.459826+00:00"
+    },
+    {
+      "id": 16,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:30.986723+00:00"
+    },
+    {
+      "id": 17,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:33.499263+00:00"
+    },
+    {
+      "id": 18,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/Nerovia",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=12, unnamed_interactive=2",
+      "executed_at": "2026-08-24T07:29:42.946616+00:00"
+    },
+    {
+      "id": 19,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/Nerovia",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:45.956534+00:00"
+    },
+    {
+      "id": 20,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/Nerovia",
+      "status": "passed",
+      "detail": "Found 2 button element(s).",
+      "executed_at": "2026-08-24T07:29:48.959969+00:00"
+    },
+    {
+      "id": 21,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Andro Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=19, unnamed_interactive=3",
+      "executed_at": "2026-08-24T07:29:56.711958+00:00"
+    },
+    {
+      "id": 22,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Input audit: :r4:",
+      "category": "input_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 3 input element(s).",
+      "executed_at": "2026-08-24T07:30:00.950382+00:00"
+    },
+    {
+      "id": 23,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Empty validation audit: :r4:",
+      "category": "empty_input_validation",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Field inspected. No required constraint was exposed.",
+      "executed_at": "2026-08-24T07:30:03.461124+00:00"
+    },
+    {
+      "id": 24,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Input audit: :r7:",
+      "category": "input_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 3 input element(s).",
+      "executed_at": "2026-08-24T07:30:05.947888+00:00"
+    },
+    {
+      "id": 25,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Empty validation audit: :r7:",
+      "category": "empty_input_validation",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Field inspected. No required constraint was exposed.",
+      "executed_at": "2026-08-24T07:30:08.437626+00:00"
+    },
+    {
+      "id": 26,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 5 button element(s).",
+      "executed_at": "2026-08-24T07:30:10.976393+00:00"
+    },
+    {
+      "id": 27,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 5 button element(s).",
+      "executed_at": "2026-08-24T07:30:13.496766+00:00"
+    },
+    {
+      "id": 28,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #3: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 5 button element(s).",
+      "executed_at": "2026-08-24T07:30:16.703914+00:00"
+    },
+    {
+      "id": 29,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #4: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 5 button element(s).",
+      "executed_at": "2026-08-24T07:30:20.818270+00:00"
+    },
+    {
+      "id": 30,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #5: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/dashboard",
+      "status": "passed",
+      "detail": "Found 5 button element(s).",
+      "executed_at": "2026-08-24T07:30:23.946205+00:00"
+    },
+    {
+      "id": 31,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Andro Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=25, unnamed_interactive=13",
+      "executed_at": "2026-08-24T07:30:31.503703+00:00"
+    },
+    {
+      "id": 32,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: Add Bed",
+      "category": "dangerous_action_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "skipped",
+      "detail": "Potentially destructive or state-changing action detected. Action was NOT executed.",
+      "executed_at": "2026-08-24T07:30:33.951766+00:00"
+    },
+    {
+      "id": 33,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: Assign Bed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "passed",
+      "detail": "Found 15 button element(s).",
+      "executed_at": "2026-08-24T07:30:36.401210+00:00"
+    },
+    {
+      "id": 34,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #3: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "passed",
+      "detail": "Found 15 button element(s).",
+      "executed_at": "2026-08-24T07:30:39.648286+00:00"
+    },
+    {
+      "id": 35,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #4: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/beds-management",
+      "status": "passed",
+      "detail": "Found 15 button element(s).",
+      "executed_at": "2026-08-24T07:30:42.212080+00:00"
+    },
+    {
+      "id": 36,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Andro Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=17, unnamed_interactive=5",
+      "executed_at": "2026-08-24T07:30:49.891165+00:00"
+    },
+    {
+      "id": 37,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #1: Add Room",
+      "category": "dangerous_action_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "skipped",
+      "detail": "Potentially destructive or state-changing action detected. Action was NOT executed.",
+      "executed_at": "2026-08-24T07:30:52.320020+00:00"
+    },
+    {
+      "id": 38,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #2: Assign Room",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "passed",
+      "detail": "Found 7 button element(s).",
+      "executed_at": "2026-08-24T07:30:54.818341+00:00"
+    },
+    {
+      "id": 39,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #3: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "passed",
+      "detail": "Found 7 button element(s).",
+      "executed_at": "2026-08-24T07:30:57.613393+00:00"
+    },
+    {
+      "id": 40,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Button audit #4: unnamed",
+      "category": "button_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/rooms-management",
+      "status": "passed",
+      "detail": "Found 7 button element(s).",
+      "executed_at": "2026-08-24T07:31:02.044885+00:00"
+    },
+    {
+      "id": 41,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/patients",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=34, unnamed_interactive=6",
+      "executed_at": "2026-08-24T07:31:09.795170+00:00"
+    },
+    {
+      "id": 42,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/finances",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=53, unnamed_interactive=3",
+      "executed_at": "2026-08-24T07:31:17.999681+00:00"
+    },
+    {
+      "id": 43,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/hrms",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=12, unnamed_interactive=2",
+      "executed_at": "2026-08-24T07:31:25.540131+00:00"
+    },
+    {
+      "id": 44,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=29, unnamed_interactive=3",
+      "executed_at": "2026-08-24T07:31:33.333970+00:00"
+    },
+    {
+      "id": 45,
+      "run_id": "run_20260824_072729_5cdbfd",
+      "name": "Deep page audit \u2014 Rayshree Ayurveda",
+      "category": "deep_page_audit",
+      "target_url": "https://hakimtest.rayshreeayurveda.com/settings/diet-management",
+      "status": "failed",
+      "detail": "Deep audit findings: interactive=19, unnamed_interactive=8",
+      "executed_at": "2026-08-24T07:31:41.790540+00:00"
+    }
+  ],
+  "bugs": [],
+  "dataflow": []
+}

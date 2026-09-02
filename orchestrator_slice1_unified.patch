@@ -1,0 +1,113 @@
+--- /home/claude/baseline_ref/orchestrator_original.py	2026-08-20 06:47:05.369057044 +0000
++++ /home/claude/slice1_work/hms-ai-qa-agent/app/orchestrator/orchestrator.py	2026-08-20 06:39:10.374508513 +0000
+@@ -17,6 +17,7 @@
+ from app.agents.dataflow.dataflow_agent import DataFlowAgent
+ from app.agents.analyzer.bug_analyzer import (
+     build_bug,
++    deduplicate_bugs,
+     reproduce_failure,
+ )
+ from app.agents.discovery.discovery_agent import DiscoveryAgent
+@@ -640,46 +641,17 @@
+                         reproducibility,
+                     )
+ 
++                    # NOTE: bugs are collected here only. They are
++                    # deduplicated and persisted to the DB in one pass
++                    # AFTER the full test loop (see BUG DEDUPLICATION
++                    # below), not immediately per-test, so that multiple
++                    # failing tests sharing the same underlying issue can
++                    # be merged into a single master bug before anything
++                    # is written.
+                     bugs.append(
+                         bug
+                     )
+ 
+-                    self.db.add_bug(
+-                        self.run_id,
+-                        {
+-                            "bug_ref": bug.bug_ref,
+-                            "title": bug.title,
+-                            "module": bug.module,
+-                            "severity": bug.severity,
+-                            "url": bug.url,
+-                            "steps": bug.steps,
+-                            "expected": bug.expected,
+-                            "actual": bug.actual,
+-                            "reproducibility": (
+-                                bug.reproducibility
+-                            ),
+-                            "screenshot_path": (
+-                                bug.screenshot_path
+-                            ),
+-                            "console_errors": (
+-                                bug.console_errors
+-                            ),
+-                            "network_errors": (
+-                                bug.network_errors
+-                            ),
+-                        },
+-                        datetime.now(
+-                            timezone.utc
+-                        ).isoformat(),
+-                    )
+-
+-                    self.logger.warning(
+-                        "Bug confirmed: %s [%s] %s",
+-                        bug.bug_ref,
+-                        bug.severity,
+-                        bug.title,
+-                    )
+-
+                     result = final_result
+ 
+                 # ----------------------------------------------------
+@@ -718,6 +690,48 @@
+             )
+ 
+         # ============================================================
++        # BUG DEDUPLICATION
++        #
++        # Candidate bugs collected during the loop above are merged here:
++        # multiple failing tests that share the same module + test
++        # category + normalized failure signal become one master bug,
++        # with every occurrence preserved in that bug's `affected` list.
++        # Bugs are persisted to the DB only after this merge, so the
++        # stored bug count reflects distinct issues, not raw failures.
++        # ============================================================
++
++        bugs = deduplicate_bugs(bugs)
++
++        for bug in bugs:
++
++            self.db.add_bug(
++                self.run_id,
++                {
++                    "bug_ref": bug.bug_ref,
++                    "title": bug.title,
++                    "module": bug.module,
++                    "severity": bug.severity,
++                    "url": bug.url,
++                    "steps": bug.steps,
++                    "expected": bug.expected,
++                    "actual": bug.actual,
++                    "reproducibility": bug.reproducibility,
++                    "screenshot_path": bug.screenshot_path,
++                    "console_errors": bug.console_errors,
++                    "network_errors": bug.network_errors,
++                },
++                datetime.now(timezone.utc).isoformat(),
++            )
++
++            self.logger.warning(
++                "Bug confirmed: %s [%s] %s (%d occurrence(s) merged)",
++                bug.bug_ref,
++                bug.severity,
++                bug.title,
++                len(bug.affected),
++            )
++
++        # ============================================================
+         # FINAL STATISTICS
+         # ============================================================
+ 

@@ -1,0 +1,32 @@
+--- app/agents/analyzer/bug_analyzer.py.slice3backup.20260822_070208	2026-08-22 07:02:08.733312251 +0000
++++ app/agents/analyzer/bug_analyzer.py	2026-08-22 07:02:25.294700584 +0000
+@@ -45,11 +45,14 @@
+     # (e.g. "3/3 retries failed" -> 100). None when it can't be parsed
+     # (e.g. "not retried") — never guessed.
+     reproducibility_pct: Optional[int] = None
+-    # Root cause / recommended fix: intentionally None until an
+-    # LLM-assisted analysis pass exists. The report renders these as
++    # Root cause / recommended fix: populated by root_cause_analyzer.py
++    # (Slice 3). None until analysis runs — the report renders these as
+     # "Not available" rather than inventing anything.
+     root_cause: Optional[str] = None
+     recommended_fix: Optional[str] = None
++    # Model confidence (0-100) in root_cause, when analysis was run and
++    # evidence was judged sufficient. None otherwise.
++    confidence: Optional[int] = None
+     # Short, human-readable description of what this test actually
+     # checked, derived only from existing TestCase data.
+     what_was_tested: str = ""
+@@ -292,3 +295,12 @@
+                 master.severity = bug.severity
+ 
+     return [merged[key] for key in order]
++
++
++def sort_bugs_by_severity(bugs: List[Bug]) -> List[Bug]:
++    """Return a NEW list of the given bugs ordered highest-severity first
++    (P0 > P1 > P2 > P3 > P4), preserving relative order among bugs of
++    equal severity (stable sort). Does not mutate the input list — used
++    by root-cause analysis to decide which bugs get priority within the
++    per-run analysis cap."""
++    return sorted(bugs, key=lambda b: -_SEVERITY_RANK.get(b.severity, -1))

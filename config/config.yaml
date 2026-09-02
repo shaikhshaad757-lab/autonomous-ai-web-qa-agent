@@ -1,0 +1,28 @@
+# Non-secret runtime configuration. Secrets live in .env, never here.
+
+discovery:
+  max_pages: 40          # hard cap on pages crawled in a single run (Phase 1)
+  max_depth: 4            # link-following depth from the dashboard
+  crawl_timeout_seconds: 20
+
+browser:
+  headless: true
+  viewport:
+    width: 1440
+    height: 900
+  navigation_timeout_ms: 15000
+  action_timeout_ms: 8000
+
+testing:
+  allow_mutations: false   # Phase 1: read-only. Phase 2+ flips this per-run.
+  allow_test_data_mutations: false  # Controlled synthetic TEST data only.
+  max_retries_before_bug: 2  # reproduction attempts before confirming a bug
+  screenshot_on_every_page: true
+
+reporting:
+  output_dir: reports
+
+llm:
+  temperature: 0.2
+  max_tokens: 1024
+  request_timeout_seconds: 60

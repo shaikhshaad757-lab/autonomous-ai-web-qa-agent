@@ -1,0 +1,46 @@
+type,name_or_url,category_or_module,status_or_severity,detail
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 1 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,passed,Page loaded without captured failures.
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Andro Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Andro Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Andro Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 1 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 2 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 1 failed request(s)"
+test,Smoke: page loads cleanly — Rayshree Ayurveda,smoke,failed,"1 console error(s), 1 failed request(s)"
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=12, unnamed_interactive=2"
+test,Button audit #1: unnamed,button_audit,passed,Found 2 button element(s).
+test,Button audit #2: unnamed,button_audit,passed,Found 2 button element(s).
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=12, unnamed_interactive=2"
+test,Button audit #1: unnamed,button_audit,passed,Found 2 button element(s).
+test,Button audit #2: unnamed,button_audit,passed,Found 2 button element(s).
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=12, unnamed_interactive=2"
+test,Button audit #1: unnamed,button_audit,passed,Found 2 button element(s).
+test,Button audit #2: unnamed,button_audit,passed,Found 2 button element(s).
+test,Deep page audit — Andro Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=19, unnamed_interactive=3"
+test,Input audit: :r4:,input_audit,passed,Found 3 input element(s).
+test,Empty validation audit: :r4:,empty_input_validation,passed,Field inspected. No required constraint was exposed.
+test,Input audit: :r7:,input_audit,passed,Found 3 input element(s).
+test,Empty validation audit: :r7:,empty_input_validation,passed,Field inspected. No required constraint was exposed.
+test,Button audit #1: unnamed,button_audit,passed,Found 5 button element(s).
+test,Button audit #2: unnamed,button_audit,passed,Found 5 button element(s).
+test,Button audit #3: unnamed,button_audit,passed,Found 5 button element(s).
+test,Button audit #4: unnamed,button_audit,passed,Found 5 button element(s).
+test,Button audit #5: unnamed,button_audit,passed,Found 5 button element(s).
+test,Deep page audit — Andro Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=25, unnamed_interactive=13"
+test,Button audit #1: Add Bed,dangerous_action_audit,skipped,Potentially destructive or state-changing action detected. Action was NOT executed.
+test,Button audit #2: Assign Bed,button_audit,passed,Found 15 button element(s).
+test,Button audit #3: unnamed,button_audit,passed,Found 15 button element(s).
+test,Button audit #4: unnamed,button_audit,passed,Found 15 button element(s).
+test,Deep page audit — Andro Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=17, unnamed_interactive=5"
+test,Button audit #1: Add Room,dangerous_action_audit,skipped,Potentially destructive or state-changing action detected. Action was NOT executed.
+test,Button audit #2: Assign Room,button_audit,passed,Found 7 button element(s).
+test,Button audit #3: unnamed,button_audit,passed,Found 7 button element(s).
+test,Button audit #4: unnamed,button_audit,passed,Found 7 button element(s).
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=34, unnamed_interactive=6"
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=53, unnamed_interactive=3"
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=12, unnamed_interactive=2"
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=29, unnamed_interactive=3"
+test,Deep page audit — Rayshree Ayurveda,deep_page_audit,failed,"Deep audit findings: interactive=19, unnamed_interactive=8"

@@ -1,0 +1,306 @@
+"""Bug reproduction + severity classification (Phase 1 version).
+
+Full spec calls for an LLM-assisted root-cause/dedup engine — that lands in
+a later phase once there's enough test variety for dedup to matter. Phase 1
+implements the reproduction and severity pieces deterministically so nothing
+downstream is blocked on Ollama being reachable.
+"""
+from __future__ import annotations
+
+import itertools
+import re
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+from app.agents.functional.functional_agent import FunctionalAgent, TestCase, TestResult
+
+_bug_counter = itertools.count(1)
+
+_SEVERITY_RANK = {"P0": 4, "P1": 3, "P2": 2, "P3": 1, "P4": 0}
+
+
+@dataclass
+class Bug:
+    bug_ref: str
+    title: str
+    module: str
+    severity: str
+    url: str
+    steps: List[str]
+    expected: str
+    actual: str
+    reproducibility: str
+    screenshot_path: Optional[str]
+    console_errors: List[str]
+    network_errors: List[str]
+    # Every test/page occurrence merged into this bug (including its own
+    # first occurrence). Populated by deduplicate_bugs(); empty for a bug
+    # that hasn't gone through dedup yet.
+    affected: List[Dict[str, str]] = field(default_factory=list)
+    # Stable signature used ONLY for dedup grouping — not persisted/reported
+    # verbatim, just used to decide which bugs represent the same issue.
+    signature: str = ""
+    # Numeric reproducibility, parsed from `reproducibility` where possible
+    # (e.g. "3/3 retries failed" -> 100). None when it can't be parsed
+    # (e.g. "not retried") — never guessed.
+    reproducibility_pct: Optional[int] = None
+    # Root cause / recommended fix: populated by root_cause_analyzer.py
+    # (Slice 3). None until analysis runs — the report renders these as
+    # "Not available" rather than inventing anything.
+    root_cause: Optional[str] = None
+    recommended_fix: Optional[str] = None
+    # Model confidence (0-100) in root_cause, when analysis was run and
+    # evidence was judged sufficient. None otherwise.
+    confidence: Optional[int] = None
+    # Short, human-readable description of what this test actually
+    # checked, derived only from existing TestCase data.
+    what_was_tested: str = ""
+
+
+def _guess_module(url: str) -> str:
+    # crude path-segment heuristic; refined in Phase 3 using the full site map
+    segments = [s for s in url.split("/") if s and "://" not in s and "." not in s]
+    return segments[-1].replace("-", " ").title() if segments else "Unknown"
+
+
+def _normalize_message(text: str) -> str:
+    """Normalize a console/error message for dedup comparison: lowercase,
+    collapse whitespace, and replace runs of digits with '#' so messages
+    that differ only by a timestamp, line number, or record ID compare
+    equal — without discarding the original text anywhere else."""
+    text = (text or "").strip().lower()
+    text = re.sub(r"\d+", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _normalize_endpoint(url: str) -> str:
+    """Normalize a failed-request URL to its path with numeric/ID-like
+    segments and the query string stripped, so the same broken endpoint
+    hit with different record IDs across pages compares equal."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = path.split("/")
+    normalized = [
+        "#" if re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s) else s
+        for s in segments
+    ]
+    return "/".join(normalized)
+
+
+def dedupe_console_messages(messages: List[str]) -> List[str]:
+    """Deduplicate console/error messages using a normalized comparison
+    key (whitespace/digit-insensitive), while preserving each distinct
+    message's original text and first-seen order. Genuinely different
+    messages are never collapsed together."""
+    seen: set[str] = set()
+    result: List[str] = []
+    for msg in messages:
+        key = _normalize_message(msg)
+        if key not in seen:
+            seen.add(key)
+            result.append(msg)
+    return result
+
+
+def _signature_module(url: str) -> str:
+    """Module classification used ONLY for dedup signatures — strips
+    numeric/ID-like path segments so /patients/12, /patients/45, and
+    /patients/99 all reduce to the same 'patients' module instead of
+    colliding on the record ID (which _guess_module, used for display,
+    does not do — it intentionally uses the LAST segment for a readable
+    title, which is often the ID itself)."""
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        path = url
+    segments = [s for s in path.split("/") if s]
+    meaningful = [
+        s for s in segments
+        if not (re.fullmatch(r"[0-9a-fA-F-]{1,36}", s) and any(c.isdigit() for c in s))
+    ]
+    if meaningful:
+        return meaningful[0].lower()
+    return segments[0].lower() if segments else "unknown"
+
+
+def _bug_signature(result: TestResult) -> str:
+    """Stable signature deciding whether two failing tests represent the
+    SAME underlying issue: (ID-stripped) module + test category + the
+    normalized dominant failure signal. Deliberately does NOT use title
+    or severity, per requirement: never merge bugs solely because those
+    match."""
+    module = _signature_module(result.test_case.target_url)
+    category = result.test_case.category
+    if result.failed_requests:
+        signal = f"network:{_normalize_endpoint(result.failed_requests[0])}"
+    elif result.console_errors:
+        signal = f"console:{_normalize_message(result.console_errors[0])}"
+    else:
+        # No console/network signal (e.g. a deep-audit finding) — fall back
+        # to the normalized detail text so unrelated failures with no
+        # console/network evidence don't all collapse into one bucket.
+        signal = f"detail:{_normalize_message(result.detail or '')}"
+    return f"{module}|{category}|{signal}"
+
+
+def classify_severity(result: TestResult) -> str:
+    text = " ".join(result.console_errors + result.failed_requests).lower()
+    if any(k in text for k in ("500", "unauthorized data", "cannot read", "fatal")):
+        return "P1"
+    if result.failed_requests:
+        return "P2"
+    if result.console_errors:
+        return "P3"
+    return "P4"
+
+
+async def reproduce_failure(
+    agent: FunctionalAgent, test_case: TestCase, max_retries: int
+) -> tuple[bool, List[TestResult]]:
+    """Re-run a failing test up to `max_retries` more times. Returns
+    (confirmed, all_results). `confirmed` is True only if the failure
+    reproduced on every attempt (simple, conservative definition for
+    Phase 1 — flaky/intermittent failures are reported separately in a
+    later phase rather than silently dropped)."""
+    results: List[TestResult] = []
+    for attempt in range(1, max_retries + 1):
+        result = await agent.execute(test_case, attempt_index=attempt)
+        results.append(result)
+        if result.status == "passed":
+            return False, results
+    return True, results
+
+
+def _parse_reproducibility_pct(reproducibility: str) -> Optional[int]:
+    """Parse a numeric reproducibility percentage from strings like
+    '3/3 retries failed' -> 100. Returns None for non-numeric forms
+    (e.g. 'not retried') rather than guessing a value."""
+    match = re.match(r"(\d+)\s*/\s*(\d+)", reproducibility or "")
+    if not match:
+        return None
+    numerator, denominator = int(match.group(1)), int(match.group(2))
+    if denominator == 0:
+        return None
+    return round((numerator / denominator) * 100)
+
+
+def _what_was_tested(result: TestResult) -> str:
+    """Human-readable description of what this test actually checked,
+    taken directly from the TestCase's own name — never invented."""
+    return result.test_case.name
+
+
+def _reproduction_steps(result: TestResult) -> List[str]:
+    """Build a concrete 3-step reproduction procedure from the TestCase's
+    own data (category / element type / field name, where present) and
+    what was actually observed in the result. Uses getattr() defensively
+    since TestCase's optional fields (element_type, test_data) may or may
+    not be populated depending on test category — never invents behavior
+    that wasn't actually captured."""
+    tc = result.test_case
+    category = getattr(tc, "category", "") or ""
+    element_type = getattr(tc, "element_type", None)
+    test_data = getattr(tc, "test_data", None) or {}
+    field_name = test_data.get("field_name") if isinstance(test_data, dict) else None
+
+    step1 = f"Navigate to {tc.target_url}"
+
+    if category == "smoke":
+        step2 = "Allow the page to load fully"
+    elif category == "deep_page_audit":
+        step2 = "Allow the page to render and run an automated DOM audit"
+    elif field_name and element_type:
+        step2 = f"Locate the {element_type} field '{field_name}' and inspect/interact with it"
+    elif element_type:
+        step2 = f"Locate and interact with the {element_type} element being audited"
+    elif field_name:
+        step2 = f"Locate the field '{field_name}'"
+    elif category:
+        step2 = f"Perform the '{category.replace('_', ' ')}' check on this page"
+    else:
+        step2 = "Perform the automated check on this page"
+
+    if result.failed_requests:
+        step3 = f"Observe the failed network request: {result.failed_requests[0]}"
+    elif result.console_errors:
+        step3 = f"Observe the console error: {result.console_errors[0]}"
+    elif result.detail:
+        step3 = f"Observe the result: {result.detail}"
+    else:
+        step3 = "Observe the failure"
+
+    return [step1, step2, step3]
+
+
+def build_bug(result: TestResult, reproducibility: str) -> Bug:
+    ref = f"BUG-{next(_bug_counter):04d}"
+    return Bug(
+        bug_ref=ref,
+        title=f"{result.test_case.name} — failed",
+        module=_guess_module(result.test_case.target_url),
+        severity=classify_severity(result),
+        url=result.test_case.target_url,
+        steps=_reproduction_steps(result),
+        expected="Page loads without console errors or failed network requests.",
+        actual=result.detail,
+        reproducibility=reproducibility,
+        screenshot_path=result.screenshot_path,
+        console_errors=dedupe_console_messages(result.console_errors),
+        network_errors=result.failed_requests,
+        affected=[],
+        signature=_bug_signature(result),
+        reproducibility_pct=_parse_reproducibility_pct(reproducibility),
+        root_cause=None,
+        recommended_fix=None,
+        what_was_tested=_what_was_tested(result),
+    )
+
+
+def deduplicate_bugs(candidates: List[Bug]) -> List[Bug]:
+    """Merge bugs sharing a stable signature (module + test category +
+    normalized dominant failure signal) into one master bug per distinct
+    issue. The first occurrence of a signature becomes the master; every
+    later match's test/page is appended to the master's `affected` list
+    as evidence rather than creating a separate bug entry.
+
+    Never merges bugs solely because their title or severity match — only
+    a shared signature triggers a merge. Reproducibility of the master
+    bug (the first occurrence) is preserved as-is; later merged
+    occurrences don't overwrite it.
+    """
+    merged: Dict[str, Bug] = {}
+    order: List[str] = []
+
+    for bug in candidates:
+        key = bug.signature
+        if key not in merged:
+            merged[key] = bug
+            order.append(key)
+            # The master's own occurrence counts as the first affected entry.
+            bug.affected.append({"url": bug.url, "detail": bug.actual})
+        else:
+            master = merged[key]
+            master.affected.append({"url": bug.url, "detail": bug.actual})
+            master.console_errors = dedupe_console_messages(
+                master.console_errors + bug.console_errors
+            )
+            for net_err in bug.network_errors:
+                if net_err not in master.network_errors:
+                    master.network_errors.append(net_err)
+            if _SEVERITY_RANK.get(bug.severity, -1) > _SEVERITY_RANK.get(master.severity, -1):
+                master.severity = bug.severity
+
+    return [merged[key] for key in order]
+
+
+def sort_bugs_by_severity(bugs: List[Bug]) -> List[Bug]:
+    """Return a NEW list of the given bugs ordered highest-severity first
+    (P0 > P1 > P2 > P3 > P4), preserving relative order among bugs of
+    equal severity (stable sort). Does not mutate the input list — used
+    by root-cause analysis to decide which bugs get priority within the
+    per-run analysis cap."""
+    return sorted(bugs, key=lambda b: -_SEVERITY_RANK.get(b.severity, -1))

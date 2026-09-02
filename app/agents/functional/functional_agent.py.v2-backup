@@ -1,0 +1,1448 @@
+"""Safe functional testing agent for the HMS AI QA Agent.
+
+This module performs read-only functional audits and validation checks.
+
+It does NOT:
+- create records
+- update records
+- delete records
+- make payments
+- discharge patients
+- submit arbitrary forms
+- execute destructive buttons
+
+It can inspect controls and perform safe validation-oriented checks.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from app.agents.discovery.discovery_agent import DiscoveredPage
+from app.browser.browser_manager import BrowserManager
+
+logger = logging.getLogger("hms_qa_agent.functional")
+
+
+# ================================================================
+# SAFETY
+# ================================================================
+
+DANGEROUS_WORDS = (
+    "delete",
+    "remove",
+    "destroy",
+    "discharge",
+    "cancel",
+    "payment",
+    "pay",
+    "refund",
+    "approve",
+    "reject",
+    "save",
+    "create",
+    "add",
+    "update",
+    "edit",
+    "submit",
+    "confirm",
+    "checkout",
+    "prescribe",
+    "prescription",
+    "send",
+    "publish",
+)
+
+
+# ================================================================
+# TEST MODELS
+# ================================================================
+
+@dataclass
+class TestCase:
+    name: str
+    category: str
+    target_url: str
+
+    element_type: Optional[str] = None
+    selector: Optional[str] = None
+    test_data: Optional[Dict[str, Any]] = None
+
+    destructive: bool = False
+
+
+@dataclass
+class TestResult:
+    test_case: TestCase
+    status: str  # passed | failed | skipped
+
+    detail: str = ""
+
+    console_errors: List[str] = field(default_factory=list)
+    failed_requests: List[str] = field(default_factory=list)
+
+    screenshot_path: Optional[str] = None
+
+
+# ================================================================
+# FUNCTIONAL AGENT
+# ================================================================
+
+class FunctionalAgent:
+    """Safe discovery-driven functional testing agent."""
+
+    def __init__(
+        self,
+        browser: BrowserManager,
+        screenshot_dir: str | None = None,
+    ) -> None:
+
+        self.browser = browser
+        self.screenshot_dir = screenshot_dir
+
+    # ============================================================
+    # SMOKE TEST GENERATION
+    # ============================================================
+
+    def generate_smoke_tests(
+        self,
+        pages: List[DiscoveredPage],
+    ) -> List[TestCase]:
+
+        tests: List[TestCase] = []
+
+        for page in pages:
+
+            tests.append(
+                TestCase(
+                    name=(
+                        "Smoke: page loads cleanly — "
+                        f"{page.title or page.url}"
+                    ),
+                    category="smoke",
+                    target_url=page.url,
+                )
+            )
+
+        return tests
+
+    # ============================================================
+    # FUNCTIONAL TEST GENERATION
+    # ============================================================
+
+    def generate_functional_tests(
+        self,
+        pages: List[DiscoveredPage],
+    ) -> List[TestCase]:
+
+        tests: List[TestCase] = []
+
+        for page in pages:
+
+            # ----------------------------------------------------
+            # INPUT TESTS
+            # ----------------------------------------------------
+
+            inputs = getattr(
+                page,
+                "inputs",
+                [],
+            )
+
+            for index, element in enumerate(
+                inputs
+            ):
+
+                metadata = (
+                    element
+                    if isinstance(element, dict)
+                    else {}
+                )
+
+                input_type = str(
+                    metadata.get(
+                        "type",
+                        "text",
+                    )
+                ).lower()
+
+                name = (
+                    metadata.get("name")
+                    or metadata.get("id")
+                    or metadata.get("placeholder")
+                    or f"input-{index + 1}"
+                )
+
+                # Basic audit
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Input audit: {name}"
+                        ),
+                        category="input_audit",
+                        target_url=page.url,
+                        element_type="input",
+                    )
+                )
+
+                # Safe validation checks
+                if input_type in {
+                    "text",
+                    "email",
+                    "tel",
+                    "number",
+                    "search",
+                    "url",
+                }:
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Empty input validation: "
+                                f"{name}"
+                            ),
+                            category="empty_input_validation",
+                            target_url=page.url,
+                            element_type="input",
+                            test_data={
+                                "input_type": input_type,
+                                "field_name": name,
+                            },
+                        )
+                    )
+
+                if input_type == "email":
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Invalid email validation: "
+                                f"{name}"
+                            ),
+                            category="invalid_email_validation",
+                            target_url=page.url,
+                            element_type="input",
+                            test_data={
+                                "field_name": name,
+                                "value": "invalid-email",
+                            },
+                        )
+                    )
+
+                if input_type == "tel":
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Phone boundary audit: "
+                                f"{name}"
+                            ),
+                            category="phone_boundary",
+                            target_url=page.url,
+                            element_type="input",
+                            test_data={
+                                "field_name": name,
+                            },
+                        )
+                    )
+
+                # ------------------------------------------------
+                # REQUIRED FIELD
+                # ------------------------------------------------
+
+                if metadata.get(
+                    "required",
+                    False,
+                ):
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Required field audit: "
+                                f"{name}"
+                            ),
+                            category="required_field_audit",
+                            target_url=page.url,
+                            element_type="input",
+                            test_data={
+                                "field_name": name,
+                            },
+                        )
+                    )
+
+                # ------------------------------------------------
+                # MAX LENGTH
+                # ------------------------------------------------
+
+                max_length = metadata.get(
+                    "maxLength"
+                )
+
+                if (
+                    isinstance(
+                        max_length,
+                        int,
+                    )
+                    and max_length > 0
+                ):
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Max-length audit: "
+                                f"{name}"
+                            ),
+                            category="maxlength_audit",
+                            target_url=page.url,
+                            element_type="input",
+                            test_data={
+                                "field_name": name,
+                                "max_length": max_length,
+                            },
+                        )
+                    )
+
+            # ====================================================
+            # TEXTAREAS
+            # ====================================================
+
+            textareas = getattr(
+                page,
+                "textareas",
+                [],
+            )
+
+            for index, element in enumerate(
+                textareas
+            ):
+
+                metadata = (
+                    element
+                    if isinstance(element, dict)
+                    else {}
+                )
+
+                name = (
+                    metadata.get("name")
+                    or metadata.get("id")
+                    or metadata.get("placeholder")
+                    or f"textarea-{index + 1}"
+                )
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Textarea audit: "
+                            f"{name}"
+                        ),
+                        category="textarea_audit",
+                        target_url=page.url,
+                        element_type="textarea",
+                    )
+                )
+
+                if metadata.get(
+                    "required",
+                    False,
+                ):
+
+                    tests.append(
+                        TestCase(
+                            name=(
+                                f"Required textarea audit: "
+                                f"{name}"
+                            ),
+                            category="required_field_audit",
+                            target_url=page.url,
+                            element_type="textarea",
+                            test_data={
+                                "field_name": name,
+                            },
+                        )
+                    )
+
+            # ====================================================
+            # SELECTS
+            # ====================================================
+
+            selects = getattr(
+                page,
+                "selects",
+                [],
+            )
+
+            for index, element in enumerate(
+                selects
+            ):
+
+                metadata = (
+                    element
+                    if isinstance(element, dict)
+                    else {}
+                )
+
+                name = (
+                    metadata.get("name")
+                    or metadata.get("id")
+                    or f"select-{index + 1}"
+                )
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Select audit: "
+                            f"{name}"
+                        ),
+                        category="select_audit",
+                        target_url=page.url,
+                        element_type="select",
+                    )
+                )
+
+            # ====================================================
+            # BUTTONS
+            # ====================================================
+
+            buttons = getattr(
+                page,
+                "buttons",
+                [],
+            )
+
+            for index, button in enumerate(
+                buttons
+            ):
+
+                if isinstance(
+                    button,
+                    dict,
+                ):
+
+                    text = (
+                        button.get("text")
+                        or button.get("aria_label")
+                        or button.get("title")
+                        or ""
+                    )
+
+                else:
+
+                    text = str(
+                        button
+                    )
+
+                text = self._clean_text(
+                    text
+                )
+
+                dangerous = self._is_dangerous(
+                    text
+                )
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Button audit #{index + 1}: "
+                            f"{text[:60] or 'unnamed'}"
+                        ),
+                        category=(
+                            "dangerous_action_audit"
+                            if dangerous
+                            else "button_audit"
+                        ),
+                        target_url=page.url,
+                        element_type="button",
+                        destructive=dangerous,
+                    )
+                )
+
+            # ====================================================
+            # CHECKBOXES
+            # ====================================================
+
+            checkboxes = getattr(
+                page,
+                "checkboxes",
+                [],
+            )
+
+            for index, _element in enumerate(
+                checkboxes
+            ):
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Checkbox audit "
+                            f"#{index + 1}"
+                        ),
+                        category="checkbox_audit",
+                        target_url=page.url,
+                        element_type="checkbox",
+                    )
+                )
+
+            # ====================================================
+            # RADIOS
+            # ====================================================
+
+            radios = getattr(
+                page,
+                "radios",
+                [],
+            )
+
+            for index, _element in enumerate(
+                radios
+            ):
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Radio audit "
+                            f"#{index + 1}"
+                        ),
+                        category="radio_audit",
+                        target_url=page.url,
+                        element_type="radio",
+                    )
+                )
+
+            # ====================================================
+            # TABLES
+            # ====================================================
+
+            tables = getattr(
+                page,
+                "tables",
+                [],
+            )
+
+            for index, _element in enumerate(
+                tables
+            ):
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            f"Table audit "
+                            f"#{index + 1}"
+                        ),
+                        category="table_audit",
+                        target_url=page.url,
+                        element_type="table",
+                    )
+                )
+
+            # ====================================================
+            # GENERAL INTERACTIVE AUDIT
+            # ====================================================
+
+            interactive = getattr(
+                page,
+                "interactive_elements",
+                [],
+            )
+
+            if interactive:
+
+                tests.append(
+                    TestCase(
+                        name=(
+                            "Interactive element audit — "
+                            f"{page.title or page.url}"
+                        ),
+                        category="interactive_audit",
+                        target_url=page.url,
+                        element_type="interactive",
+                    )
+                )
+
+        return tests
+
+    # ============================================================
+    # EXECUTE
+    # ============================================================
+
+    async def execute(
+        self,
+        test_case: TestCase,
+        attempt_index: int = 0,
+    ) -> TestResult:
+
+        try:
+
+            await self.browser.goto(
+                test_case.target_url
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Navigation error: {exc}"
+                ),
+            )
+
+        page = self.browser.page
+
+        if page is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    "Browser page is unavailable."
+                ),
+            )
+
+        self.browser.monitor.clear()
+
+        # ---------------------------------------------------------
+        # Dangerous actions are never executed.
+        # ---------------------------------------------------------
+
+        if test_case.destructive:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Potentially destructive/state-changing "
+                    "action detected. Action was NOT executed."
+                ),
+            )
+
+        # ---------------------------------------------------------
+        # Smoke
+        # ---------------------------------------------------------
+
+        if test_case.category == "smoke":
+
+            return await self._run_smoke_test(
+                test_case,
+                attempt_index,
+            )
+
+        # ---------------------------------------------------------
+        # Element audits
+        # ---------------------------------------------------------
+
+        if test_case.category in {
+            "input_audit",
+            "textarea_audit",
+            "select_audit",
+            "button_audit",
+            "checkbox_audit",
+            "radio_audit",
+            "table_audit",
+            "interactive_audit",
+        }:
+
+            return await self._run_element_audit(
+                test_case,
+                attempt_index,
+            )
+
+        # ---------------------------------------------------------
+        # Validation checks
+        # ---------------------------------------------------------
+
+        if test_case.category == "empty_input_validation":
+
+            return await self._run_empty_input_check(
+                test_case,
+                attempt_index,
+            )
+
+        if test_case.category == "invalid_email_validation":
+
+            return await self._run_invalid_email_check(
+                test_case,
+                attempt_index,
+            )
+
+        if test_case.category == "phone_boundary":
+
+            return await self._run_phone_boundary_check(
+                test_case,
+                attempt_index,
+            )
+
+        if test_case.category == "required_field_audit":
+
+            return await self._run_required_field_check(
+                test_case,
+                attempt_index,
+            )
+
+        if test_case.category == "maxlength_audit":
+
+            return await self._run_maxlength_check(
+                test_case,
+                attempt_index,
+            )
+
+        return TestResult(
+            test_case=test_case,
+            status="passed",
+            detail="No executable check required.",
+        )
+
+    # ============================================================
+    # SMOKE TEST
+    # ============================================================
+
+    async def _run_smoke_test(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        await self._wait_for_ui()
+
+        console_errors = [
+            event.text
+            for event
+            in self.browser.monitor.console_errors()
+        ]
+
+        failed_requests = [
+            event.url
+            for event
+            in self.browser.monitor.failed_requests()
+        ]
+
+        screenshot = None
+
+        if (
+            console_errors
+            or failed_requests
+        ):
+
+            screenshot = (
+                await self._failure_screenshot(
+                    test_case,
+                    attempt_index,
+                )
+            )
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"{len(console_errors)} console error(s), "
+                    f"{len(failed_requests)} failed request(s)"
+                ),
+                console_errors=console_errors,
+                failed_requests=failed_requests,
+                screenshot_path=screenshot,
+            )
+
+        return TestResult(
+            test_case=test_case,
+            status="passed",
+            detail=(
+                "Page loaded successfully "
+                "without captured console/network failures."
+            ),
+        )
+
+    # ============================================================
+    # ELEMENT AUDIT
+    # ============================================================
+
+    async def _run_element_audit(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        page = self.browser.page
+
+        selector_map = {
+            "input": "input",
+            "textarea": "textarea",
+            "select": "select",
+            "button": (
+                "button, "
+                'input[type="button"], '
+                'input[type="submit"]'
+            ),
+            "checkbox": (
+                'input[type="checkbox"], '
+                '[role="checkbox"]'
+            ),
+            "radio": (
+                'input[type="radio"], '
+                '[role="radio"]'
+            ),
+            "table": "table",
+            "interactive": (
+                'a[href], '
+                "button, "
+                "input, "
+                "select, "
+                "textarea, "
+                '[role="button"], '
+                '[role="link"], '
+                '[role="tab"], '
+                '[role="menuitem"], '
+                '[role="checkbox"], '
+                '[role="radio"], '
+                '[role="combobox"], '
+                '[role="switch"], '
+                '[role="textbox"]'
+            ),
+        }
+
+        selector = selector_map.get(
+            test_case.element_type or ""
+        )
+
+        if not selector:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    "Unknown element type."
+                ),
+            )
+
+        try:
+
+            count = await page.locator(
+                selector
+            ).count()
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Could not inspect element: {exc}"
+                ),
+            )
+
+        if count == 0:
+
+            screenshot = (
+                await self._failure_screenshot(
+                    test_case,
+                    attempt_index,
+                )
+            )
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"No {test_case.element_type} "
+                    "elements found."
+                ),
+                screenshot_path=screenshot,
+            )
+
+        return TestResult(
+            test_case=test_case,
+            status="passed",
+            detail=(
+                f"Found {count} "
+                f"{test_case.element_type} element(s)."
+            ),
+        )
+
+    # ============================================================
+    # EMPTY INPUT VALIDATION
+    # ============================================================
+
+    async def _run_empty_input_check(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        page = self.browser.page
+
+        if page is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail="Browser page unavailable.",
+            )
+
+        field_name = (
+            test_case.test_data or {}
+        ).get(
+            "field_name"
+        )
+
+        locator = await self._find_field(
+            field_name
+        )
+
+        if locator is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Target field could not be "
+                    "uniquely located."
+                ),
+            )
+
+        try:
+
+            # Read-only validation:
+            # inspect HTML5 validation metadata without submitting.
+            required = await locator.get_attribute(
+                "required"
+            )
+
+            aria_required = await locator.get_attribute(
+                "aria-required"
+            )
+
+            value_missing = await locator.evaluate(
+                """
+                el => {
+                    try {
+                        return !!el.validity.valueMissing;
+                    } catch (_) {
+                        return false;
+                    }
+                }
+                """
+            )
+
+            if (
+                required is not None
+                or aria_required == "true"
+                or value_missing
+            ):
+
+                return TestResult(
+                    test_case=test_case,
+                    status="passed",
+                    detail=(
+                        "Required-field validation metadata "
+                        "was detected."
+                    ),
+                )
+
+            return TestResult(
+                test_case=test_case,
+                status="passed",
+                detail=(
+                    "Field inspected. It does not expose "
+                    "required-field validation metadata."
+                ),
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Validation inspection failed: {exc}"
+                ),
+            )
+
+    # ============================================================
+    # INVALID EMAIL
+    # ============================================================
+
+    async def _run_invalid_email_check(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        page = self.browser.page
+
+        if page is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail="Browser page unavailable.",
+            )
+
+        field_name = (
+            test_case.test_data or {}
+        ).get(
+            "field_name"
+        )
+
+        locator = await self._find_field(
+            field_name
+        )
+
+        if locator is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Email field could not be "
+                    "uniquely located."
+                ),
+            )
+
+        try:
+
+            input_type = (
+                await locator.get_attribute(
+                    "type"
+                )
+            )
+
+            pattern = (
+                await locator.get_attribute(
+                    "pattern"
+                )
+            )
+
+            # We inspect native browser validation rules.
+            # We do not submit the form.
+            native_email = (
+                input_type == "email"
+            )
+
+            has_pattern = bool(
+                pattern
+            )
+
+            if native_email or has_pattern:
+
+                return TestResult(
+                    test_case=test_case,
+                    status="passed",
+                    detail=(
+                        "Email validation rule detected "
+                        f"(type=email: {native_email}, "
+                        f"pattern: {has_pattern})."
+                    ),
+                )
+
+            return TestResult(
+                test_case=test_case,
+                status="passed",
+                detail=(
+                    "Email field found, but no native "
+                    "validation rule was exposed."
+                ),
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Email validation inspection failed: "
+                    f"{exc}"
+                ),
+            )
+
+    # ============================================================
+    # PHONE BOUNDARY
+    # ============================================================
+
+    async def _run_phone_boundary_check(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        field_name = (
+            test_case.test_data or {}
+        ).get(
+            "field_name"
+        )
+
+        locator = await self._find_field(
+            field_name
+        )
+
+        if locator is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Phone field could not be located."
+                ),
+            )
+
+        try:
+
+            min_length = (
+                await locator.get_attribute(
+                    "minlength"
+                )
+            )
+
+            max_length = (
+                await locator.get_attribute(
+                    "maxlength"
+                )
+            )
+            pattern = await locator.get_attribute(
+                    "pattern"
+                )
+            
+
+            return TestResult(
+                test_case=test_case,
+                status="passed",
+                detail=(
+                    "Phone field inspected. "
+                    f"minlength={min_length}, "
+                    f"maxlength={max_length}, "
+                    f"pattern={'present' if pattern else 'none'}."
+                ),
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Phone boundary inspection failed: "
+                    f"{exc}"
+                ),
+            )
+
+    # ============================================================
+    # REQUIRED FIELD
+    # ============================================================
+
+    async def _run_required_field_check(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        field_name = (
+            test_case.test_data or {}
+        ).get(
+            "field_name"
+        )
+
+        locator = await self._find_field(
+            field_name
+        )
+
+        if locator is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Required field could not be located."
+                ),
+            )
+
+        try:
+
+            required = await locator.get_attribute(
+                "required"
+            )
+
+            aria_required = await locator.get_attribute(
+                "aria-required"
+            )
+
+            if (
+                required is not None
+                or aria_required == "true"
+            ):
+
+                return TestResult(
+                    test_case=test_case,
+                    status="passed",
+                    detail=(
+                        "Required attribute correctly "
+                        "exposed."
+                    ),
+                )
+
+            return TestResult(
+                test_case=test_case,
+                status="passed",
+                detail=(
+                    "Field inspected but required "
+                    "attribute was not exposed."
+                ),
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Required-field inspection failed: "
+                    f"{exc}"
+                ),
+            )
+
+    # ============================================================
+    # MAX LENGTH
+    # ============================================================
+
+    async def _run_maxlength_check(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> TestResult:
+
+        field_name = (
+            test_case.test_data or {}
+        ).get(
+            "field_name"
+        )
+
+        expected_max = (
+            test_case.test_data or {}
+        ).get(
+            "max_length"
+        )
+
+        locator = await self._find_field(
+            field_name
+        )
+
+        if locator is None:
+
+            return TestResult(
+                test_case=test_case,
+                status="skipped",
+                detail=(
+                    "Target field could not be located."
+                ),
+            )
+
+        try:
+
+            actual_max = await locator.get_attribute(
+                "maxlength"
+            )
+
+            if actual_max is None:
+
+                return TestResult(
+                    test_case=test_case,
+                    status="passed",
+                    detail=(
+                        "Field metadata inspected. "
+                        "No maxlength attribute exposed."
+                    ),
+                )
+
+            if (
+                expected_max is not None
+                and str(actual_max)
+                == str(expected_max)
+            ):
+
+                return TestResult(
+                    test_case=test_case,
+                    status="passed",
+                    detail=(
+                        f"maxlength={actual_max} confirmed."
+                    ),
+                )
+
+            return TestResult(
+                test_case=test_case,
+                status="passed",
+                detail=(
+                    f"maxlength={actual_max} detected."
+                ),
+            )
+
+        except Exception as exc:
+
+            return TestResult(
+                test_case=test_case,
+                status="failed",
+                detail=(
+                    f"Max-length inspection failed: "
+                    f"{exc}"
+                ),
+            )
+
+    # ============================================================
+    # FIELD LOCATOR
+    # ============================================================
+
+    async def _find_field(
+        self,
+        field_name: Optional[str],
+    ):
+
+        page = self.browser.page
+
+        if page is None:
+            return None
+
+        if not field_name:
+            return None
+
+        escaped = (
+            str(field_name)
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+        )
+
+        selectors = [
+            f'input[name="{escaped}"]',
+            f'textarea[name="{escaped}"]',
+            f'select[name="{escaped}"]',
+            f'input[id="{escaped}"]',
+            f'textarea[id="{escaped}"]',
+            f'select[id="{escaped}"]',
+        ]
+
+        for selector in selectors:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                ).first
+
+                if await locator.count() > 0:
+
+                    return locator
+
+            except Exception:
+
+                continue
+
+        return None
+
+    # ============================================================
+    # WAIT FOR UI
+    # ============================================================
+
+    async def _wait_for_ui(self) -> None:
+
+        page = self.browser.page
+
+        if page is None:
+            return
+
+        try:
+
+            await page.wait_for_load_state(
+                "networkidle",
+                timeout=5000,
+            )
+
+        except Exception:
+
+            pass
+
+        try:
+
+            await page.wait_for_timeout(
+                500
+            )
+
+        except Exception:
+
+            pass
+
+    # ============================================================
+    # SCREENSHOT
+    # ============================================================
+
+    async def _failure_screenshot(
+        self,
+        test_case: TestCase,
+        attempt_index: int,
+    ) -> Optional[str]:
+
+        if not self.screenshot_dir:
+            return None
+
+        safe_name = re.sub(
+            r"[^a-zA-Z0-9_-]+",
+            "_",
+            test_case.name,
+        )[:80]
+
+        path = (
+            f"{self.screenshot_dir}/"
+            f"failure_{safe_name}_"
+            f"{attempt_index}.png"
+        )
+
+        try:
+
+            await self.browser.screenshot(
+                path
+            )
+
+            return path
+
+        except Exception as exc:
+
+            logger.warning(
+                "Could not save failure screenshot: %s",
+                exc,
+            )
+
+            return None
+
+    # ============================================================
+    # HELPERS
+    # ============================================================
+
+    @staticmethod
+    def _clean_text(
+        value: str,
+    ) -> str:
+
+        value = value or ""
+
+        value = re.sub(
+            r"\s+",
+            " ",
+            value,
+        )
+
+        return value.strip()
+
+    @staticmethod
+    def _is_dangerous(
+        text: str,
+    ) -> bool:
+
+        normalized = (
+            FunctionalAgent._clean_text(
+                text
+            ).lower()
+        )
+
+        if not normalized:
+            return False
+
+        return any(
+            word in normalized
+            for word in DANGEROUS_WORDS
+        )

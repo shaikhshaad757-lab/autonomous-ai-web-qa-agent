@@ -1,0 +1,115 @@
+2026-08-24 12:57:29,252 [INFO] hms_qa_agent: === HMS AI QA Agent — run run_20260824_072729_5cdbfd ===
+2026-08-24 12:57:29,253 [INFO] hms_qa_agent: Target: https://hakimtest.rayshreeayurveda.com/admin-login (environment=TEST)
+2026-08-24 12:57:29,253 [INFO] hms_qa_agent: Mutation testing disabled. Safe/read-only testing mode is active.
+2026-08-24 12:57:29,324 [INFO] hms_qa_agent: Ollama reachable at http://localhost:11434 (model=qwen3:8b).
+2026-08-24 12:57:32,629 [INFO] hms_qa_agent.browser: Checking HMS login page: https://hakimtest.rayshreeayurveda.com/admin-login/
+2026-08-24 12:57:33,500 [INFO] hms_qa_agent.browser: Login credentials filled successfully.
+2026-08-24 12:57:33,502 [INFO] hms_qa_agent.browser: Clicking Sign in.
+2026-08-24 12:57:33,543 [INFO] hms_qa_agent.browser: Login submission completed. Current URL: https://hakimtest.rayshreeayurveda.com/admin-login/
+2026-08-24 12:57:33,543 [INFO] hms_qa_agent.browser: Waiting for HMS authentication/redirect...
+2026-08-24 12:57:34,044 [INFO] hms_qa_agent.browser: LOGIN SUCCESSFUL. Authenticated HMS page detected.
+2026-08-24 12:57:34,045 [INFO] hms_qa_agent: Login verified.
+2026-08-24 12:57:35,071 [INFO] hms_qa_agent.discovery: Discovered [1/40] depth=0 https://hakimtest.rayshreeayurveda.com/welcome (Rayshree Ayurveda) — links=10 forms=0 inputs=0 buttons=2 selects=0 checkboxes=0 radios=0 tables=0 interactive=12 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:35,869 [INFO] hms_qa_agent.discovery: Discovered [2/40] depth=1 https://hakimtest.rayshreeayurveda.com/ (Rayshree Ayurveda) — links=10 forms=0 inputs=0 buttons=2 selects=0 checkboxes=0 radios=0 tables=0 interactive=12 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:36,920 [INFO] hms_qa_agent.discovery: Discovered [3/40] depth=1 https://hakimtest.rayshreeayurveda.com/Nerovia (Rayshree Ayurveda) — links=10 forms=0 inputs=0 buttons=2 selects=0 checkboxes=0 radios=0 tables=0 interactive=12 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:37,852 [INFO] hms_qa_agent.discovery: Discovered [4/40] depth=1 https://hakimtest.rayshreeayurveda.com/dashboard (Andro Ayurveda) — links=10 forms=0 inputs=2 buttons=5 selects=0 checkboxes=0 radios=0 tables=0 interactive=17 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:38,798 [INFO] hms_qa_agent.discovery: Discovered [5/40] depth=1 https://hakimtest.rayshreeayurveda.com/settings/beds-management (Andro Ayurveda) — links=10 forms=0 inputs=0 buttons=4 selects=0 checkboxes=0 radios=0 tables=0 interactive=14 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:39,748 [INFO] hms_qa_agent.discovery: Discovered [6/40] depth=1 https://hakimtest.rayshreeayurveda.com/settings/rooms-management (Andro Ayurveda) — links=10 forms=0 inputs=0 buttons=4 selects=0 checkboxes=0 radios=0 tables=0 interactive=14 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:40,692 [INFO] hms_qa_agent.discovery: Discovered [7/40] depth=1 https://hakimtest.rayshreeayurveda.com/patients (Rayshree Ayurveda) — links=0 forms=0 inputs=0 buttons=0 selects=0 checkboxes=0 radios=0 tables=0 interactive=0 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:41,661 [INFO] hms_qa_agent.discovery: Discovered [8/40] depth=1 https://hakimtest.rayshreeayurveda.com/finances (Rayshree Ayurveda) — links=0 forms=0 inputs=0 buttons=0 selects=0 checkboxes=0 radios=0 tables=0 interactive=0 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:42,611 [INFO] hms_qa_agent.discovery: Discovered [9/40] depth=1 https://hakimtest.rayshreeayurveda.com/hrms (Rayshree Ayurveda) — links=0 forms=0 inputs=0 buttons=0 selects=0 checkboxes=0 radios=0 tables=0 interactive=0 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:43,541 [INFO] hms_qa_agent.discovery: Discovered [10/40] depth=1 https://hakimtest.rayshreeayurveda.com/settings (Rayshree Ayurveda) — links=0 forms=0 inputs=0 buttons=0 selects=0 checkboxes=0 radios=0 tables=0 interactive=0 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:44,511 [INFO] hms_qa_agent.discovery: Discovered [11/40] depth=1 https://hakimtest.rayshreeayurveda.com/settings/diet-management (Rayshree Ayurveda) — links=0 forms=0 inputs=0 buttons=0 selects=0 checkboxes=0 radios=0 tables=0 interactive=0 deep_findings=0 console_errors=0 warnings=0 network_failures=0 4xx=0 5xx=0 slow=0
+2026-08-24 12:57:44,517 [INFO] hms_qa_agent: Discovery complete: 11 pages found.
+2026-08-24 12:57:44,517 [INFO] hms_qa_agent: Discovery elements: inputs=2, buttons=19, selects=0, checkboxes=0, radios=0, tables=0, interactive=81
+2026-08-24 12:57:44,517 [INFO] hms_qa_agent: Data-flow testing disabled. No test data will be created or modified.
+2026-08-24 12:57:44,517 [INFO] hms_qa_agent: Data-flow results: 0
+2026-08-24 12:57:44,517 [INFO] hms_qa_agent: Generated 11 smoke test(s) + 34 functional test(s) = 45 total test(s).
+2026-08-24 12:57:44,518 [INFO] hms_qa_agent: Running test [1/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:57:47,312 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:57:52,461 [INFO] hms_qa_agent: Running test [2/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:57:54,862 [INFO] hms_qa_agent: Running test [3/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:57:58,000 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:04,196 [INFO] hms_qa_agent: Running test [4/45]: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:08,489 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:13,547 [INFO] hms_qa_agent: Running test [5/45]: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:16,044 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:21,146 [INFO] hms_qa_agent: Running test [6/45]: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:23,690 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Andro Ayurveda
+2026-08-24 12:58:28,743 [INFO] hms_qa_agent: Running test [7/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:31,232 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:36,400 [INFO] hms_qa_agent: Running test [8/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:39,203 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:44,865 [INFO] hms_qa_agent: Running test [9/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:47,304 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:52,287 [INFO] hms_qa_agent: Running test [10/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:58:54,817 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:59:00,002 [INFO] hms_qa_agent: Running test [11/45]: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:59:02,574 [WARNING] hms_qa_agent: Test failed: Smoke: page loads cleanly — Rayshree Ayurveda
+2026-08-24 12:59:07,824 [INFO] hms_qa_agent: Running test [12/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:10,590 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:15,759 [INFO] hms_qa_agent: Running test [13/45]: Button audit #1: unnamed
+2026-08-24 12:59:18,518 [INFO] hms_qa_agent: Running test [14/45]: Button audit #2: unnamed
+2026-08-24 12:59:21,001 [INFO] hms_qa_agent: Running test [15/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:23,486 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:28,460 [INFO] hms_qa_agent: Running test [16/45]: Button audit #1: unnamed
+2026-08-24 12:59:30,988 [INFO] hms_qa_agent: Running test [17/45]: Button audit #2: unnamed
+2026-08-24 12:59:33,500 [INFO] hms_qa_agent: Running test [18/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:36,611 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 12:59:42,947 [INFO] hms_qa_agent: Running test [19/45]: Button audit #1: unnamed
+2026-08-24 12:59:45,957 [INFO] hms_qa_agent: Running test [20/45]: Button audit #2: unnamed
+2026-08-24 12:59:48,961 [INFO] hms_qa_agent: Running test [21/45]: Deep page audit — Andro Ayurveda
+2026-08-24 12:59:51,544 [WARNING] hms_qa_agent: Test failed: Deep page audit — Andro Ayurveda
+2026-08-24 12:59:56,712 [INFO] hms_qa_agent: Running test [22/45]: Input audit: :r4:
+2026-08-24 13:00:00,952 [INFO] hms_qa_agent: Running test [23/45]: Empty validation audit: :r4:
+2026-08-24 13:00:03,462 [INFO] hms_qa_agent: Running test [24/45]: Input audit: :r7:
+2026-08-24 13:00:05,948 [INFO] hms_qa_agent: Running test [25/45]: Empty validation audit: :r7:
+2026-08-24 13:00:08,438 [INFO] hms_qa_agent: Running test [26/45]: Button audit #1: unnamed
+2026-08-24 13:00:10,979 [INFO] hms_qa_agent: Running test [27/45]: Button audit #2: unnamed
+2026-08-24 13:00:13,498 [INFO] hms_qa_agent: Running test [28/45]: Button audit #3: unnamed
+2026-08-24 13:00:16,705 [INFO] hms_qa_agent: Running test [29/45]: Button audit #4: unnamed
+2026-08-24 13:00:20,818 [INFO] hms_qa_agent: Running test [30/45]: Button audit #5: unnamed
+2026-08-24 13:00:23,947 [INFO] hms_qa_agent: Running test [31/45]: Deep page audit — Andro Ayurveda
+2026-08-24 13:00:26,462 [WARNING] hms_qa_agent: Test failed: Deep page audit — Andro Ayurveda
+2026-08-24 13:00:31,504 [INFO] hms_qa_agent: Running test [32/45]: Button audit #1: Add Bed
+2026-08-24 13:00:33,952 [INFO] hms_qa_agent: Running test [33/45]: Button audit #2: Assign Bed
+2026-08-24 13:00:36,402 [INFO] hms_qa_agent: Running test [34/45]: Button audit #3: unnamed
+2026-08-24 13:00:39,649 [INFO] hms_qa_agent: Running test [35/45]: Button audit #4: unnamed
+2026-08-24 13:00:42,214 [INFO] hms_qa_agent: Running test [36/45]: Deep page audit — Andro Ayurveda
+2026-08-24 13:00:44,776 [WARNING] hms_qa_agent: Test failed: Deep page audit — Andro Ayurveda
+2026-08-24 13:00:49,891 [INFO] hms_qa_agent: Running test [37/45]: Button audit #1: Add Room
+2026-08-24 13:00:52,323 [INFO] hms_qa_agent: Running test [38/45]: Button audit #2: Assign Room
+2026-08-24 13:00:54,820 [INFO] hms_qa_agent: Running test [39/45]: Button audit #3: unnamed
+2026-08-24 13:00:57,615 [INFO] hms_qa_agent: Running test [40/45]: Button audit #4: unnamed
+2026-08-24 13:01:02,046 [INFO] hms_qa_agent: Running test [41/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:04,597 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:09,795 [INFO] hms_qa_agent: Running test [42/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:12,555 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:18,000 [INFO] hms_qa_agent: Running test [43/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:20,505 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:25,541 [INFO] hms_qa_agent: Running test [44/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:28,284 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:33,334 [INFO] hms_qa_agent: Running test [45/45]: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:36,341 [WARNING] hms_qa_agent: Test failed: Deep page audit — Rayshree Ayurveda
+2026-08-24 13:01:41,792 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0001 [P2] Shared trailing-slash routing failures across pages (page URL returns 404 when requested with a trailing slash) (10 occurrence(s) merged)
+2026-08-24 13:01:41,793 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0011 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,793 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0012 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,794 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0013 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,794 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0014 [P4] Deep page audit — Andro Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,795 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0015 [P4] Deep page audit — Andro Ayurveda — failed (4 occurrence(s) merged)
+2026-08-24 13:01:41,795 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0017 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,796 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0018 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:01:41,797 [WARNING] hms_qa_agent: Bug confirmed and persisted: BUG-0019 [P4] Deep page audit — Rayshree Ayurveda — failed (1 occurrence(s) merged)
+2026-08-24 13:04:57,841 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:06:55,925 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:07:55,945 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 2/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:07:55,945 [WARNING] hms_qa_agent.analyzer.root_cause: Root-cause analysis failed for BUG-0014: Model did not return valid JSON matching RootCauseAnalysis after 2 attempt(s): ReadTimeout (no message)
+2026-08-24 13:08:55,966 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:09:55,982 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 2/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:09:55,983 [WARNING] hms_qa_agent.analyzer.root_cause: Root-cause analysis failed for BUG-0015: Model did not return valid JSON matching RootCauseAnalysis after 2 attempt(s): ReadTimeout (no message)
+2026-08-24 13:10:56,000 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:11:56,017 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 2/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:11:56,018 [WARNING] hms_qa_agent.analyzer.root_cause: Root-cause analysis failed for BUG-0017: Model did not return valid JSON matching RootCauseAnalysis after 2 attempt(s): ReadTimeout (no message)
+2026-08-24 13:12:56,037 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:14:42,530 [WARNING] hms_qa_agent.llm: Ollama structured output attempt 1/2 failed — network error: ReadTimeout (no message)
+2026-08-24 13:14:46,282 [INFO] hms_qa_agent: Reports written to /Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/run_20260824_072729_5cdbfd

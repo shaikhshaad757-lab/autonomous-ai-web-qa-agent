@@ -1,0 +1,62 @@
+--- app/orchestrator/orchestrator.py.slice3backup.20260822_070208	2026-08-22 07:02:08.735736343 +0000
++++ app/orchestrator/orchestrator.py	2026-08-22 07:03:10.698727658 +0000
+@@ -20,7 +20,9 @@
+     build_bug,
+     deduplicate_bugs,
+     reproduce_failure,
++    sort_bugs_by_severity,
+ )
++from app.agents.analyzer.root_cause_analyzer import analyze_bugs
+ from app.agents.discovery.discovery_agent import DiscoveryAgent
+ from app.agents.functional.functional_agent import FunctionalAgent
+ from app.browser.browser_manager import BrowserManager
+@@ -151,6 +153,9 @@
+         # ------------------------------------------------------------
+ 
+         ollama_ok = await self.ollama.health_check()
++        # Stored so _test_and_analyze() can skip guaranteed-to-fail
++        # root-cause analysis calls if Ollama was already unreachable here.
++        self.ollama_ok = ollama_ok
+ 
+         if ollama_ok:
+ 
+@@ -703,6 +708,39 @@
+ 
+         bugs = deduplicate_bugs(bugs)
+ 
++        # ============================================================
++        # ROOT-CAUSE ANALYSIS (Slice 3, item 1)
++        #
++        # Runs AFTER deduplication so analysis happens once per distinct
++        # issue, not once per raw failing test. Capped to the top 10 bugs
++        # by severity to bound added latency. Ollama failures (unreachable,
++        # timeout, malformed response) are fully contained inside
++        # analyze_bugs() and never fail the run — the outer try/except
++        # here is defense-in-depth on top of that.
++        # ============================================================
++
++        try:
++            ordered_bugs = sort_bugs_by_severity(bugs)
++            analysis_counts = await analyze_bugs(
++                self.ollama,
++                ordered_bugs,
++                max_bugs=10,
++                ollama_reachable=getattr(self, "ollama_ok", False),
++            )
++            self.logger.info(
++                "Root-cause analysis (AI-assisted, max 10 bugs by severity): "
++                "%d analyzed, %d insufficient evidence, %d unavailable, %d skipped (cap).",
++                analysis_counts["analyzed"],
++                analysis_counts["insufficient"],
++                analysis_counts["unavailable"],
++                analysis_counts["skipped"],
++            )
++        except Exception as exc:
++            self.logger.warning(
++                "Root-cause analysis batch failed unexpectedly (continuing without it): %s",
++                exc,
++            )
++
+         for bug in bugs:
+ 
+             self.db.add_bug(

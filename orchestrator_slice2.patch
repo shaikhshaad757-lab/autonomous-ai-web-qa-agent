@@ -1,0 +1,49 @@
+--- app/orchestrator/orchestrator.py.slice2backup.20260820_115449	2026-08-20 11:54:49.926749607 +0000
++++ app/orchestrator/orchestrator.py	2026-08-20 11:55:27.904267906 +0000
+@@ -11,6 +11,7 @@
+ 
+ import logging
+ import uuid
++from dataclasses import asdict
+ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+@@ -233,7 +234,7 @@
+                 # REPORTS
+                 # ----------------------------------------------------
+ 
+-                self._write_reports(dataflow_results)
++                self._write_reports(bugs, dataflow_results)
+ 
+                 status = "completed"
+ 
+@@ -773,12 +774,19 @@
+     # REPORTING
+     # ================================================================
+ 
+-    def _write_reports(self, dataflow_results=None) -> None:
++    def _write_reports(self, bugs=None, dataflow_results=None) -> None:
+ 
+         data = self.db.fetch_all(
+             self.run_id
+         )
+ 
++        # Bugs are serialized from the in-memory, already-deduplicated
++        # list (not re-fetched from the DB) so fields that only exist on
++        # the in-memory Bug object — affected occurrences, numeric
++        # reproducibility, root_cause/recommended_fix placeholders — reach
++        # the report. db.py itself is intentionally left unchanged.
++        serialized_bugs = [asdict(b) for b in (bugs or [])]
++
+         serialized_dataflow = []
+ 
+         for result in (dataflow_results or []):
+@@ -794,7 +802,7 @@
+             data["run"],
+             data["pages"],
+             data["tests"],
+-            data["bugs"],
++            serialized_bugs,
+             serialized_dataflow,
+         )
+ 

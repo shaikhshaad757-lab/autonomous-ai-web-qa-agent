@@ -1,0 +1,1100 @@
+"""Playwright browser manager with deep QA telemetry.
+
+Safe/read-only inspection:
+- login
+- console messages
+- page exceptions
+- network requests/responses
+- failed requests
+- response status codes
+- request timing
+- resource timing
+- screenshots
+
+No destructive action is executed automatically.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    async_playwright,
+)
+
+logger = logging.getLogger("hms_qa_agent.browser")
+
+
+EMAIL_SELECTORS = [
+    'input[type="email"]',
+    'input[name*="email" i]',
+    'input[name*="username" i]',
+    'input[id*="email" i]',
+    'input[id*="username" i]',
+    'input[autocomplete="username"]',
+]
+
+PASSWORD_SELECTORS = [
+    'input[type="password"]',
+]
+
+SUBMIT_SELECTORS = [
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Log in")',
+    'button:has-text("Login")',
+    'button:has-text("Sign in")',
+]
+
+
+@dataclass
+class ConsoleEvent:
+    type: str
+    text: str
+    location: Optional[str] = None
+
+
+@dataclass
+class NetworkEvent:
+    url: str
+    method: str
+    status: Optional[int] = None
+    ok: Optional[bool] = None
+    failure_text: Optional[str] = None
+    resource_type: Optional[str] = None
+    duration_ms: Optional[float] = None
+
+
+@dataclass
+class PageMonitor:
+    console_events: List[ConsoleEvent] = field(default_factory=list)
+    network_events: List[NetworkEvent] = field(default_factory=list)
+
+    def console_errors(self) -> List[ConsoleEvent]:
+        return [
+            e for e in self.console_events
+            if e.type == "error"
+        ]
+
+    def console_warnings(self) -> List[ConsoleEvent]:
+        return [
+            e for e in self.console_events
+            if e.type == "warning"
+        ]
+
+    def failed_requests(self) -> List[NetworkEvent]:
+        return [
+            e for e in self.network_events
+            if e.failure_text
+            or (
+                e.status is not None
+                and e.status >= 400
+            )
+        ]
+
+    def server_errors(self) -> List[NetworkEvent]:
+        return [
+            e for e in self.network_events
+            if e.status is not None
+            and e.status >= 500
+        ]
+
+    def client_errors(self) -> List[NetworkEvent]:
+        return [
+            e for e in self.network_events
+            if e.status is not None
+            and 400 <= e.status < 500
+        ]
+
+    def slow_requests(
+        self,
+        threshold_ms: float = 2000,
+    ) -> List[NetworkEvent]:
+        return [
+            e for e in self.network_events
+            if e.duration_ms is not None
+            and e.duration_ms >= threshold_ms
+        ]
+
+    def clear(self) -> None:
+        self.console_events.clear()
+        self.network_events.clear()
+
+
+class BrowserManager:
+
+    def __init__(
+        self,
+        headless: bool = True,
+        viewport: Optional[Dict[str, int]] = None,
+        navigation_timeout_ms: int = 15000,
+        action_timeout_ms: int = 8000,
+    ) -> None:
+
+        self.headless = headless
+        self.viewport = viewport or {
+            "width": 1440,
+            "height": 900,
+        }
+
+        self.navigation_timeout_ms = (
+            navigation_timeout_ms
+        )
+
+        self.action_timeout_ms = (
+            action_timeout_ms
+        )
+
+        self._playwright: Optional[Playwright] = None
+        self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
+
+        self.page: Optional[Page] = None
+
+        self.monitor = PageMonitor()
+
+        self._request_start_times: Dict[int, float] = {}
+
+    async def start(self) -> None:
+
+        self._playwright = (
+            await async_playwright().start()
+        )
+
+        self._browser = await (
+            self._playwright.chromium.launch(
+                headless=self.headless
+            )
+        )
+
+        self._context = await (
+            self._browser.new_context(
+                viewport=self.viewport
+            )
+        )
+
+        self._context.set_default_navigation_timeout(
+            self.navigation_timeout_ms
+        )
+
+        self._context.set_default_timeout(
+            self.action_timeout_ms
+        )
+
+        self.page = await (
+            self._context.new_page()
+        )
+
+        self._attach_monitors(
+            self.page
+        )
+
+    # ------------------------------------------------------------
+    # TELEMETRY
+    # ------------------------------------------------------------
+
+    def _attach_monitors(
+        self,
+        page: Page,
+    ) -> None:
+
+        page.on(
+            "console",
+            lambda msg: self._record_console(
+                msg
+            ),
+        )
+
+        page.on(
+            "pageerror",
+            lambda exc: self.monitor.console_events.append(
+                ConsoleEvent(
+                    type="pageerror",
+                    text=f"Uncaught exception: {exc}",
+                )
+            ),
+        )
+
+        page.on(
+            "request",
+            self._on_request,
+        )
+
+        page.on(
+            "requestfailed",
+            self._on_request_failed,
+        )
+
+        page.on(
+            "response",
+            self._on_response,
+        )
+
+    def _record_console(
+        self,
+        msg: Any,
+    ) -> None:
+
+        try:
+            location = str(
+                msg.location
+            )
+        except Exception:
+            location = None
+
+        self.monitor.console_events.append(
+            ConsoleEvent(
+                type=msg.type,
+                text=msg.text,
+                location=location,
+            )
+        )
+
+    def _on_request(
+        self,
+        request: Any,
+    ) -> None:
+
+        self._request_start_times[
+            id(request)
+        ] = time.monotonic()
+
+    def _on_request_failed(
+        self,
+        request: Any,
+    ) -> None:
+
+        start = self._request_start_times.pop(
+            id(request),
+            None,
+        )
+
+        duration = (
+            (time.monotonic() - start) * 1000
+            if start is not None
+            else None
+        )
+
+        failure = request.failure
+
+        if isinstance(failure, dict):
+            failure_text = (
+                failure.get("errorText")
+                or str(failure)
+            )
+        else:
+            failure_text = (
+                str(failure)
+                if failure
+                else "unknown failure"
+            )
+
+        self.monitor.network_events.append(
+            NetworkEvent(
+                url=request.url,
+                method=request.method,
+                failure_text=failure_text,
+                resource_type=request.resource_type,
+                duration_ms=duration,
+            )
+        )
+
+    def _on_response(
+        self,
+        response: Any,
+    ) -> None:
+
+        request = response.request
+
+        start = self._request_start_times.pop(
+            id(request),
+            None,
+        )
+
+        duration = (
+            (time.monotonic() - start) * 1000
+            if start is not None
+            else None
+        )
+
+        self.monitor.network_events.append(
+            NetworkEvent(
+                url=response.url,
+                method=request.method,
+                status=response.status,
+                ok=response.ok,
+                resource_type=request.resource_type,
+                duration_ms=duration,
+            )
+        )
+
+    # ------------------------------------------------------------
+    # NAVIGATION
+    # ------------------------------------------------------------
+
+    async def goto(
+        self,
+        url: str,
+    ) -> None:
+
+        assert self.page is not None
+
+        self.monitor.clear()
+
+        await self.page.goto(
+            url,
+            wait_until="domcontentloaded",
+        )
+
+        try:
+            await self.page.wait_for_timeout(
+                500
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------
+    # LOGIN
+    # ------------------------------------------------------------
+
+    async def detect_and_fill_login(
+        self,
+        email: str,
+        password: str,
+    ) -> bool:
+
+        assert self.page is not None
+
+        page = self.page
+
+        logger.info(
+            "Checking HMS login page: %s",
+            page.url,
+        )
+
+        # Some HMS pages expose User/Admin choices.
+        try:
+            admin_button = page.get_by_role(
+                "button",
+                name="Admin",
+            ).first
+
+            if await admin_button.count() > 0:
+
+                logger.info(
+                    "Admin login option detected. "
+                    "Selecting Admin."
+                )
+
+                await admin_button.click()
+
+                await page.wait_for_timeout(
+                    500
+                )
+
+        except Exception:
+            pass
+
+        password_locator = None
+
+        try:
+
+            password_locator = page.locator(
+                'input[type="password"]'
+            ).first
+
+            await password_locator.wait_for(
+                state="visible",
+                timeout=10000,
+            )
+
+        except Exception:
+
+            password_locator = None
+
+        if password_locator is None:
+
+            logger.info(
+                "No password field detected on %s.",
+                page.url,
+            )
+
+            return False
+
+        email_locator = None
+
+        for selector in EMAIL_SELECTORS:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                ).first
+
+                if await locator.count() > 0:
+
+                    email_locator = locator
+
+                    break
+
+            except Exception:
+
+                continue
+
+        if email_locator is None:
+
+            logger.warning(
+                "Password field found but no "
+                "email/username field detected."
+            )
+
+            return False
+
+        await email_locator.fill(
+            email
+        )
+
+        await password_locator.fill(
+            password
+        )
+
+        logger.info(
+            "Login credentials filled successfully."
+        )
+
+        submitted = False
+
+        for selector in SUBMIT_SELECTORS:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                ).first
+
+                if await locator.count() > 0:
+
+                    logger.info(
+                        "Clicking Sign in."
+                    )
+
+                    await locator.click()
+
+                    submitted = True
+
+                    break
+
+            except Exception:
+
+                continue
+
+        if not submitted:
+
+            await password_locator.press(
+                "Enter"
+            )
+
+        try:
+
+            await page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=10000,
+            )
+
+        except Exception:
+
+            pass
+
+        logger.info(
+            "Login submission completed. "
+            "Current URL: %s",
+            page.url,
+        )
+
+        return True
+
+    async def verify_login_success(
+        self,
+        pre_login_url: str,
+    ) -> bool:
+
+        assert self.page is not None
+
+        page = self.page
+
+        try:
+
+            await page.wait_for_timeout(
+                500
+            )
+
+        except Exception:
+
+            pass
+
+        password_visible = False
+
+        for selector in PASSWORD_SELECTORS:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                ).first
+
+                if (
+                    await locator.count() > 0
+                    and await locator.is_visible()
+                ):
+
+                    password_visible = True
+
+                    break
+
+            except Exception:
+
+                continue
+
+        url_changed = (
+            page.url != pre_login_url
+        )
+
+        success = (
+            url_changed
+            and not password_visible
+        )
+
+        if success:
+
+            logger.info(
+                "LOGIN SUCCESSFUL. "
+                "Authenticated HMS page detected."
+            )
+
+        return success
+
+    # ------------------------------------------------------------
+    # SCREENSHOT
+    # ------------------------------------------------------------
+
+    async def screenshot(
+        self,
+        path: str,
+    ) -> None:
+
+        assert self.page is not None
+
+        await self.page.screenshot(
+            path=path,
+            full_page=True,
+        )
+
+    # ------------------------------------------------------------
+    # DEEP PAGE METADATA
+    # ------------------------------------------------------------
+
+    async def extract_page_metadata(
+        self,
+    ) -> Dict[str, Any]:
+
+        assert self.page is not None
+
+        page = self.page
+
+        title = await page.title()
+
+        url = page.url
+
+        # Links
+        links = await page.eval_on_selector_all(
+            "a[href]",
+            """
+            els => els.map(e => ({
+                href: e.href,
+                text: (e.textContent || '').trim().slice(0,80),
+                visible: !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length)
+            }))
+            """,
+        )
+
+        # Forms
+        forms = await page.eval_on_selector_all(
+            "form",
+            """
+            forms => forms.map(f => ({
+                action: f.action || null,
+                method: f.method || 'get',
+                inputs: Array.from(
+                    f.querySelectorAll(
+                        'input,select,textarea'
+                    )
+                ).map(i => ({
+                    name: i.name || null,
+                    id: i.id || null,
+                    type: i.type || i.tagName.toLowerCase(),
+                    required: !!i.required,
+                    disabled: !!i.disabled,
+                    readOnly: !!i.readOnly,
+                    placeholder: i.placeholder || null
+                }))
+            }))
+            """,
+        )
+
+        # Inputs
+        inputs = await page.eval_on_selector_all(
+            "input",
+            """
+            els => els.map(e => ({
+                type: e.type || 'text',
+                name: e.name || null,
+                id: e.id || null,
+                placeholder: e.placeholder || null,
+                autocomplete: e.autocomplete || null,
+                required: !!e.required,
+                disabled: !!e.disabled,
+                readOnly: !!e.readOnly,
+                min: e.min || null,
+                max: e.max || null,
+                minLength: e.minLength >= 0 ? e.minLength : null,
+                maxLength: e.maxLength >= 0 ? e.maxLength : null,
+                pattern: e.pattern || null
+            }))
+            """,
+        )
+
+        textareas = await page.eval_on_selector_all(
+            "textarea",
+            """
+            els => els.map(e => ({
+                name: e.name || null,
+                id: e.id || null,
+                placeholder: e.placeholder || null,
+                required: !!e.required,
+                disabled: !!e.disabled,
+                readOnly: !!e.readOnly,
+                minLength: e.minLength >= 0 ? e.minLength : null,
+                maxLength: e.maxLength >= 0 ? e.maxLength : null
+            }))
+            """,
+        )
+
+        selects = await page.eval_on_selector_all(
+            "select",
+            """
+            els => els.map(e => ({
+                name: e.name || null,
+                id: e.id || null,
+                required: !!e.required,
+                disabled: !!e.disabled,
+                options: Array.from(e.options).map(o => ({
+                    text: (o.textContent || '').trim(),
+                    value: o.value,
+                    disabled: !!o.disabled
+                }))
+            }))
+            """,
+        )
+
+        buttons = await page.eval_on_selector_all(
+            "button,input[type=submit],input[type=button]",
+            """
+            els => els.map(e => ({
+                text: (
+                    e.textContent ||
+                    e.value ||
+                    e.getAttribute('aria-label') ||
+                    e.title ||
+                    ''
+                ).trim().slice(0,100),
+                type: e.type || 'button',
+                disabled: !!e.disabled,
+                visible: !!(
+                    e.offsetWidth ||
+                    e.offsetHeight ||
+                    e.getClientRects().length
+                )
+            }))
+            """,
+        )
+
+        checkboxes = await page.eval_on_selector_all(
+            'input[type="checkbox"]',
+            """
+            els => els.map(e => ({
+                name: e.name || null,
+                id: e.id || null,
+                checked: !!e.checked,
+                disabled: !!e.disabled
+            }))
+            """,
+        )
+
+        radios = await page.eval_on_selector_all(
+            'input[type="radio"]',
+            """
+            els => els.map(e => ({
+                name: e.name || null,
+                id: e.id || null,
+                checked: !!e.checked,
+                disabled: !!e.disabled
+            }))
+            """,
+        )
+
+        tables = await page.eval_on_selector_all(
+            "table",
+            """
+            els => els.map(e => ({
+                rows: e.rows ? e.rows.length : 0,
+                columns: (
+                    e.rows && e.rows[0]
+                    ? e.rows[0].cells.length
+                    : 0
+                )
+            }))
+            """,
+        )
+
+        # Deep DOM inspection
+        deep = await page.evaluate(
+            """
+            () => {
+                const all = Array.from(
+                    document.querySelectorAll('*')
+                );
+
+                const visible = el => {
+                    const s = getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+
+                    return (
+                        s.display !== 'none' &&
+                        s.visibility !== 'hidden' &&
+                        parseFloat(s.opacity || '1') > 0 &&
+                        r.width > 0 &&
+                        r.height > 0
+                    );
+                };
+
+                const rect = el =>
+                    el.getBoundingClientRect();
+
+                const text = el =>
+                    (el.textContent || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim();
+
+                const interactive = all.filter(
+                    el =>
+                        el.matches(
+                            'a[href],button,input,select,textarea,' +
+                            '[role="button"],[role="link"],' +
+                            '[role="tab"],[role="checkbox"],' +
+                            '[role="radio"],[role="combobox"],' +
+                            '[role="textbox"],[role="switch"]'
+                        )
+                );
+
+                const empty = all
+                    .filter(el => {
+                        if (!visible(el)) return false;
+
+                        const tag = el.tagName.toLowerCase();
+
+                        if (
+                            ![
+                                'div',
+                                'section',
+                                'article',
+                                'main',
+                                'aside',
+                                'span',
+                                'p'
+                            ].includes(tag)
+                        ) return false;
+
+                        return (
+                            !text(el) &&
+                            !el.querySelector(
+                                'img,svg,canvas,input,button,select,textarea'
+                            )
+                        );
+                    })
+                    .slice(0, 100)
+                    .map(el => ({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || null,
+                        className: (
+                            typeof el.className === 'string'
+                                ? el.className
+                                : ''
+                        ).slice(0,120)
+                    }));
+
+                const hidden = all
+                    .filter(el => {
+                        if (!el.matches(
+                            'button,input,select,textarea,a[href],[role]'
+                        )) return false;
+
+                        return !visible(el);
+                    })
+                    .slice(0, 100)
+                    .map(el => ({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || null,
+                        text: text(el).slice(0,80)
+                    }));
+
+                const offscreen = interactive
+                    .filter(el => {
+                        if (!visible(el)) return false;
+
+                        const r = rect(el);
+
+                        return (
+                            r.right < 0 ||
+                            r.bottom < 0 ||
+                            r.left > window.innerWidth ||
+                            r.top > window.innerHeight
+                        );
+                    })
+                    .slice(0, 100)
+                    .map(el => ({
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || null,
+                        text: text(el).slice(0,80)
+                    }));
+
+                const missingLabels = all
+                    .filter(el =>
+                        el.matches(
+                            'input,select,textarea'
+                        )
+                    )
+                    .filter(el => {
+                        const type =
+                            (
+                                el.getAttribute('type') ||
+                                ''
+                            ).toLowerCase();
+
+                        if (
+                            [
+                                'hidden',
+                                'submit',
+                                'button',
+                                'reset',
+                                'image'
+                            ].includes(type)
+                        ) return false;
+
+                        const id = el.id;
+
+                        const hasLabel =
+                            id &&
+                            !!document.querySelector(
+                                `label[for="${CSS.escape(id)}"]`
+                            );
+
+                        const parentLabel =
+                            !!el.closest('label');
+
+                        const aria =
+                            el.getAttribute(
+                                'aria-label'
+                            ) ||
+                            el.getAttribute(
+                                'aria-labelledby'
+                            );
+
+                        return (
+                            !hasLabel &&
+                            !parentLabel &&
+                            !aria
+                        );
+                    })
+                    .slice(0,100)
+                    .map(el => ({
+                        tag: el.tagName.toLowerCase(),
+                        name: el.name || null,
+                        id: el.id || null,
+                        type: el.type || null
+                    }));
+
+                const images = all
+                    .filter(el =>
+                        el.matches('img')
+                    )
+                    .map(el => ({
+                        src: el.currentSrc || el.src || null,
+                        alt: el.getAttribute('alt'),
+                        complete: el.complete,
+                        naturalWidth: el.naturalWidth,
+                        naturalHeight: el.naturalHeight
+                    }));
+
+                const brokenImages = images.filter(
+                    img =>
+                        img.complete &&
+                        img.src &&
+                        img.naturalWidth === 0
+                );
+
+                const missingAlt = images.filter(
+                    img =>
+                        img.alt === null
+                );
+
+                const ids = {};
+
+                all.forEach(el => {
+                    if (el.id) {
+                        ids[el.id] =
+                            (ids[el.id] || 0) + 1;
+                    }
+                });
+
+                const duplicateIds =
+                    Object.entries(ids)
+                        .filter(
+                            ([, count]) =>
+                                count > 1
+                        )
+                        .map(
+                            ([id, count]) => ({
+                                id,
+                                count
+                            })
+                        );
+
+                const overflowing = [];
+
+                if (
+                    document.documentElement.scrollWidth >
+                    document.documentElement.clientWidth
+                ) {
+                    overflowing.push({
+                        type: 'horizontal_document_overflow',
+                        scrollWidth:
+                            document.documentElement.scrollWidth,
+                        clientWidth:
+                            document.documentElement.clientWidth
+                    });
+                }
+
+                return {
+                    viewport: {
+                        width: window.innerWidth,
+                        height: window.innerHeight
+                    },
+
+                    document: {
+                        width:
+                            document.documentElement.scrollWidth,
+                        height:
+                            document.documentElement.scrollHeight
+                    },
+
+                    counts: {
+                        all_elements: all.length,
+                        interactive: interactive.length,
+                        images: images.length
+                    },
+
+                    empty_elements: empty,
+                    hidden_interactive: hidden,
+                    offscreen_interactive: offscreen,
+                    missing_labels: missingLabels,
+                    broken_images: brokenImages,
+                    missing_alt: missingAlt,
+                    duplicate_ids: duplicateIds,
+                    overflow: overflowing
+                };
+            }
+            """
+        )
+
+        return {
+            "url": url,
+            "title": title,
+            "links": links,
+            "forms": forms,
+            "inputs": inputs,
+            "textareas": textareas,
+            "selects": selects,
+            "buttons": buttons,
+            "checkboxes": checkboxes,
+            "radios": radios,
+            "tables": tables,
+            "deep": deep,
+            "console_errors": [
+                e.text
+                for e in self.monitor.console_errors()
+            ],
+            "console_warnings": [
+                e.text
+                for e in self.monitor.console_warnings()
+            ],
+            "failed_requests": [
+                {
+                    "url": e.url,
+                    "status": e.status,
+                    "method": e.method,
+                    "failure": e.failure_text,
+                    "duration_ms": e.duration_ms
+                }
+                for e in self.monitor.failed_requests()
+            ],
+            "client_errors": [
+                {
+                    "url": e.url,
+                    "status": e.status,
+                    "method": e.method
+                }
+                for e in self.monitor.client_errors()
+            ],
+            "server_errors": [
+                {
+                    "url": e.url,
+                    "status": e.status,
+                    "method": e.method
+                }
+                for e in self.monitor.server_errors()
+            ],
+            "slow_requests": [
+                {
+                    "url": e.url,
+                    "status": e.status,
+                    "method": e.method,
+                    "duration_ms": e.duration_ms
+                }
+                for e in self.monitor.slow_requests()
+            ],
+        }
+
+    # ------------------------------------------------------------
+    # CLOSE
+    # ------------------------------------------------------------
+
+    async def close(self) -> None:
+
+        if self._context:
+
+            await self._context.close()
+
+        if self._browser:
+
+            await self._browser.close()
+
+        if self._playwright:
+
+            await self._playwright.stop()

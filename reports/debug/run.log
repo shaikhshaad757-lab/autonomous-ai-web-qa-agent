@@ -1,0 +1,14 @@
+2026-08-19 15:05:14,282 [INFO] hms_qa_agent: Target URL (from HMS_URL in .env): https://hakimtest.rayshreeayurveda.com/admin-login
+2026-08-19 15:05:14,282 [INFO] hms_qa_agent: Opening a VISIBLE browser window for inspection...
+2026-08-19 15:05:22,652 [INFO] hms_qa_agent: Current URL: https://hakimtest.rayshreeayurveda.com/admin-login/
+2026-08-19 15:05:22,655 [INFO] hms_qa_agent: Page title: Rayshree Ayurveda
+2026-08-19 15:05:22,667 [INFO] hms_qa_agent: Password field count: 1
+2026-08-19 15:05:22,673 [INFO] hms_qa_agent: Email/username-like field counts: {'input[type="email"]': 1, 'input[name*="email" i]': 1, 'input[name*="username" i]': 0, 'input[id*="email" i]': 1, 'input[id*="username" i]': 0, 'input[autocomplete="username"]': 0}
+2026-08-19 15:05:22,683 [INFO] hms_qa_agent: All <input> elements (safe metadata only): [{'type': 'email', 'name': 'email', 'id': 'email', 'placeholder': 'Enter your email address', 'autocomplete': 'email'}, {'type': 'password', 'name': 'password', 'id': 'password', 'placeholder': 'Enter your password', 'autocomplete': 'current-password'}]
+2026-08-19 15:05:22,686 [INFO] hms_qa_agent: Buttons / submit controls found: [{'tag': 'button', 'type': 'button', 'text': 'User'}, {'tag': 'button', 'type': 'button', 'text': 'Admin'}, {'tag': 'button', 'type': 'submit', 'text': 'Sign in'}]
+2026-08-19 15:05:22,691 [INFO] hms_qa_agent: Submit-like selectors that matched: [('button[type="submit"]', 1), ('button:has-text("Sign in")', 1)]
+2026-08-19 15:05:22,691 [INFO] hms_qa_agent: Iframes on page: []
+2026-08-19 15:05:22,952 [INFO] hms_qa_agent: Screenshot saved to: /Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/debug/login_page.png
+2026-08-19 15:05:22,953 [INFO] hms_qa_agent: HTML saved to: /Users/mohammadshaad/Downloads/hms-ai-qa-agent/reports/debug/login_page.html
+2026-08-19 15:05:22,953 [INFO] hms_qa_agent: Diagnostic complete. Closing browser in 5 seconds...
+2026-08-19 15:05:28,050 [INFO] hms_qa_agent: Done. Review the screenshot/HTML in reports/debug/ for full detail.

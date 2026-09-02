@@ -1,0 +1,779 @@
+"""HMS AI QA Agent orchestrator.
+
+LOGIN -> DISCOVER -> GENERATE TESTS -> EXECUTE -> REPRODUCE FAILURES
+-> BUILD BUGS -> REPORT.
+
+Phase 2 adds safe functional UI audits while keeping destructive
+and state-changing actions disabled.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.agents.dataflow.dataflow_agent import DataFlowAgent
+from app.agents.analyzer.bug_analyzer import (
+    build_bug,
+    reproduce_failure,
+)
+from app.agents.discovery.discovery_agent import DiscoveryAgent
+from app.agents.functional.functional_agent import FunctionalAgent
+from app.browser.browser_manager import BrowserManager
+from app.database.db import Database
+from app.llm.ollama_client import OllamaClient
+from app.reporting.report_generator import generate_reports
+from app.utils.config import AppConfig, Secrets
+from app.utils.logger import register_secret, setup_logging
+
+logger = logging.getLogger("hms_qa_agent.orchestrator")
+
+
+class Orchestrator:
+
+    def __init__(
+        self,
+        secrets: Secrets,
+        app_config: AppConfig,
+        project_root: Path,
+    ) -> None:
+
+        self.secrets = secrets
+        self.config = app_config
+        self.project_root = project_root
+
+        self.run_id = (
+            f"run_"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_"
+            f"{uuid.uuid4().hex[:6]}"
+        )
+
+        self.run_dir = (
+            project_root
+            / app_config.reporting.output_dir
+            / self.run_id
+        )
+
+        self.screenshots_dir = self.run_dir / "screenshots"
+        self.logs_dir = self.run_dir / "logs"
+        self.bugs_dir = self.run_dir / "bugs"
+
+        for directory in (
+            self.run_dir,
+            self.screenshots_dir,
+            self.logs_dir,
+            self.bugs_dir,
+        ):
+            directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        # Register credentials with the log redaction system.
+        register_secret(
+            secrets.hms_email,
+            secrets.hms_password,
+        )
+
+        self.logger = setup_logging(
+            self.logs_dir
+        )
+
+        self.db = Database(
+            self.run_dir / "run.db"
+        )
+
+        self.ollama = OllamaClient(
+            host=secrets.ollama_host,
+            model=secrets.ollama_model,
+            temperature=app_config.llm.temperature,
+            max_tokens=app_config.llm.max_tokens,
+            timeout_seconds=(
+                app_config.llm.request_timeout_seconds
+            ),
+        )
+
+    # ================================================================
+    # MAIN RUN
+    # ================================================================
+
+    async def run(self) -> dict:
+
+        started_at = (
+            datetime.now(timezone.utc)
+            .isoformat()
+        )
+
+        self.db.create_run(
+            self.run_id,
+            started_at,
+            self.secrets.hms_url,
+            self.secrets.environment,
+        )
+
+        self.logger.info(
+            "=== HMS AI QA Agent — run %s ===",
+            self.run_id,
+        )
+
+        self.logger.info(
+            "Target: %s (environment=%s)",
+            self.secrets.hms_url,
+            self.secrets.environment,
+        )
+
+        # ------------------------------------------------------------
+        # Mutation safety
+        # ------------------------------------------------------------
+
+        if not self.config.testing.allow_mutations:
+
+            self.logger.info(
+                "Mutation testing disabled. "
+                "Safe/read-only testing mode is active."
+            )
+
+        if not self.secrets.is_mutation_allowed_environment():
+
+            self.logger.warning(
+                "HMS_ENVIRONMENT=%s — "
+                "destructive/mutating tests remain "
+                "force-disabled.",
+                self.secrets.environment,
+            )
+
+        # ------------------------------------------------------------
+        # Ollama health
+        # ------------------------------------------------------------
+
+        ollama_ok = await self.ollama.health_check()
+
+        if ollama_ok:
+
+            self.logger.info(
+                "Ollama reachable at %s (model=%s).",
+                self.secrets.ollama_host,
+                self.secrets.ollama_model,
+            )
+
+        else:
+
+            self.logger.warning(
+                "Ollama not reachable at %s — "
+                "continuing without LLM-assisted analysis.",
+                self.secrets.ollama_host,
+            )
+
+        # ------------------------------------------------------------
+        # Browser
+        # ------------------------------------------------------------
+
+        browser = BrowserManager(
+            headless=self.config.browser.headless,
+            viewport={
+                "width": self.config.browser.viewport.width,
+                "height": self.config.browser.viewport.height,
+            },
+            navigation_timeout_ms=(
+                self.config.browser.navigation_timeout_ms
+            ),
+            action_timeout_ms=(
+                self.config.browser.action_timeout_ms
+            ),
+        )
+
+        await browser.start()
+
+        status = "failed"
+
+        try:
+
+            # --------------------------------------------------------
+            # LOGIN
+            # --------------------------------------------------------
+
+            login_ok = await self._login(
+                browser
+            )
+
+            if not login_ok:
+
+                self.logger.error(
+                    "Login could not be verified. "
+                    "Aborting run."
+                )
+
+                status = "login_failed"
+
+            else:
+
+                # ----------------------------------------------------
+                # DISCOVERY
+                # ----------------------------------------------------
+
+                pages = await self._discover(
+                    browser
+                )
+
+                # ----------------------------------------------------
+                # TESTING
+                # ----------------------------------------------------
+
+                tests, bugs = (
+                    await self._test_and_analyze(
+                        browser,
+                        pages,
+                    )
+                )
+
+                # ----------------------------------------------------
+                # REPORTS
+                # ----------------------------------------------------
+
+                self._write_reports()
+
+                status = "completed"
+
+        except Exception as exc:
+
+            self.logger.exception(
+                "Unhandled error during QA run: %s",
+                exc,
+            )
+
+            status = "failed"
+
+        finally:
+
+            await browser.close()
+
+            finished_at = (
+                datetime.now(timezone.utc)
+                .isoformat()
+            )
+
+            self.db.finish_run(
+                self.run_id,
+                finished_at,
+                status,
+            )
+
+            self.db.close()
+
+        return {
+            "run_id": self.run_id,
+            "status": status,
+            "report_dir": str(self.run_dir),
+        }
+
+    # ================================================================
+    # LOGIN
+    # ================================================================
+
+    async def _login(
+        self,
+        browser: BrowserManager,
+    ) -> bool:
+
+        await browser.goto(
+            self.secrets.hms_url
+        )
+
+        pre_login_url = browser.page.url
+
+        form_found = (
+            await browser.detect_and_fill_login(
+                self.secrets.hms_email,
+                self.secrets.hms_password,
+            )
+        )
+
+        if not form_found:
+
+            self.logger.info(
+                "No login form detected — "
+                "assuming already authenticated "
+                "or no authentication required."
+            )
+
+            return True
+
+        ok = await browser.verify_login_success(
+            pre_login_url
+        )
+
+        self.logger.info(
+            "Login %s.",
+            "verified" if ok else "could not be verified",
+        )
+
+        return ok
+
+    # ================================================================
+    # DISCOVERY
+    # ================================================================
+
+    async def _discover(
+        self,
+        browser: BrowserManager,
+    ):
+
+        discovery = DiscoveryAgent(
+            browser=browser,
+            base_url=self.secrets.hms_url,
+            max_pages=self.config.discovery.max_pages,
+            max_depth=self.config.discovery.max_depth,
+            screenshot_dir=str(
+                self.screenshots_dir
+            ),
+        )
+
+        pages = await discovery.crawl(
+            browser.page.url
+        )
+
+        # ------------------------------------------------------------
+        # Store discovered pages
+        # ------------------------------------------------------------
+
+        for page in pages:
+
+            self.db.add_page(
+                self.run_id,
+                {
+                    "url": page.url,
+                    "title": page.title,
+                    "depth": page.depth,
+                    "forms": page.forms,
+                    "links": page.links,
+                    "screenshot_path": (
+                        page.screenshot_path
+                    ),
+                },
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            )
+
+        self.logger.info(
+            "Discovery complete: %d pages found.",
+            len(pages),
+        )
+
+        # ------------------------------------------------------------
+        # Discovery statistics
+        # ------------------------------------------------------------
+
+        total_inputs = sum(
+            len(getattr(page, "inputs", []))
+            for page in pages
+        )
+
+        total_buttons = sum(
+            len(getattr(page, "buttons", []))
+            for page in pages
+        )
+
+        total_selects = sum(
+            len(getattr(page, "selects", []))
+            for page in pages
+        )
+
+        total_checkboxes = sum(
+            len(getattr(page, "checkboxes", []))
+            for page in pages
+        )
+
+        total_radios = sum(
+            len(getattr(page, "radios", []))
+            for page in pages
+        )
+
+        total_tables = sum(
+            len(getattr(page, "tables", []))
+            for page in pages
+        )
+
+        total_interactive = sum(
+            len(
+                getattr(
+                    page,
+                    "interactive_elements",
+                    [],
+                )
+            )
+            for page in pages
+        )
+
+        self.logger.info(
+            (
+                "Discovery elements: "
+                "inputs=%d, buttons=%d, selects=%d, "
+                "checkboxes=%d, radios=%d, tables=%d, "
+                "interactive=%d"
+            ),
+            total_inputs,
+            total_buttons,
+            total_selects,
+            total_checkboxes,
+            total_radios,
+            total_tables,
+            total_interactive,
+        )
+
+        return pages
+
+    # ================================================================
+    # TESTING + BUG ANALYSIS
+    # ================================================================
+
+    async def _test_and_analyze(
+        self,
+        browser: BrowserManager,
+        pages,
+    ):
+
+        functional = FunctionalAgent(
+            browser,
+            screenshot_dir=str(
+                self.screenshots_dir
+            ),
+        )
+
+        # ------------------------------------------------------------
+        # Phase 1 smoke tests
+        # ------------------------------------------------------------
+
+        smoke_tests = (
+            functional.generate_smoke_tests(
+                pages
+            )
+        )
+
+        # ------------------------------------------------------------
+        # Phase 2 safe functional audits
+        # ------------------------------------------------------------
+
+        functional_tests = (
+            functional.generate_functional_tests(
+                pages
+            )
+        )
+
+        # ------------------------------------------------------------
+        # Combine
+        # ------------------------------------------------------------
+
+        test_cases = (
+            smoke_tests
+            + functional_tests
+        )
+
+        # ------------------------------------------------------------
+        # Data-flow / persistence testing
+        #
+        # IMPORTANT:
+        # This remains disabled unless explicitly enabled in TEST.
+        # ------------------------------------------------------------
+
+        dataflow_enabled = (
+            self.secrets.environment.upper() == "TEST"
+            and getattr(
+                self.config.testing,
+                "allow_test_data_mutations",
+                False,
+            )
+        )
+
+        dataflow = DataFlowAgent(
+            browser,
+            screenshot_dir=str(self.screenshots_dir),
+            enabled=dataflow_enabled,
+        )
+
+        dataflow_results = []
+
+        if dataflow_enabled:
+            self.logger.info(
+                "Data-flow testing ENABLED for TEST environment."
+            )
+
+            for page in pages:
+                try:
+                    result = await dataflow.run_page(page.url)
+                    dataflow_results.append(result)
+
+                    self.logger.info(
+                        "Data-flow [%s] %s — %s",
+                        result.status.upper(),
+                        page.url,
+                        result.detail,
+                    )
+
+                except Exception as exc:
+                    self.logger.exception(
+                        "Data-flow test error on %s: %s",
+                        page.url,
+                        exc,
+                    )
+        else:
+            self.logger.info(
+                "Data-flow testing disabled. "
+                "No test data will be created or modified."
+            )
+
+        self.logger.info(
+            "Data-flow results: %d",
+            len(dataflow_results),
+        )
+
+        self.logger.info(
+            (
+                "Generated %d smoke test(s) + "
+                "%d functional test(s) = "
+                "%d total test(s)."
+            ),
+            len(smoke_tests),
+            len(functional_tests),
+            len(test_cases),
+        )
+
+        results = []
+        bugs = []
+
+        # ============================================================
+        # EXECUTE TESTS
+        # ============================================================
+
+        for index, test_case in enumerate(
+            test_cases,
+            start=1,
+        ):
+
+            self.logger.info(
+                "Running test [%d/%d]: %s",
+                index,
+                len(test_cases),
+                test_case.name,
+            )
+
+            try:
+
+                result = await functional.execute(
+                    test_case
+                )
+
+            except Exception as exc:
+
+                self.logger.exception(
+                    "Test execution crashed: %s",
+                    test_case.name,
+                )
+
+                from app.agents.functional.functional_agent import (
+                    TestResult,
+                )
+
+                result = TestResult(
+                    test_case=test_case,
+                    status="failed",
+                    detail=(
+                        "Test execution exception: "
+                        f"{exc}"
+                    ),
+                )
+
+            # --------------------------------------------------------
+            # FAILED TEST
+            # --------------------------------------------------------
+
+            if result.status == "failed":
+
+                self.logger.warning(
+                    "Test failed: %s",
+                    test_case.name,
+                )
+
+                confirmed, retry_results = (
+                    await reproduce_failure(
+                        functional,
+                        test_case,
+                        self.config.testing.max_retries_before_bug,
+                    )
+                )
+
+                final_result = (
+                    retry_results[-1]
+                    if retry_results
+                    else result
+                )
+
+                if retry_results:
+
+                    failed_retries = sum(
+                        1
+                        for retry in retry_results
+                        if retry.status == "failed"
+                    )
+
+                    reproducibility = (
+                        f"{failed_retries}/"
+                        f"{len(retry_results)} retries failed"
+                    )
+
+                else:
+
+                    reproducibility = (
+                        "not retried"
+                    )
+
+                # ----------------------------------------------------
+                # CONFIRMED BUG
+                # ----------------------------------------------------
+
+                if confirmed:
+
+                    bug = build_bug(
+                        final_result,
+                        reproducibility,
+                    )
+
+                    bugs.append(
+                        bug
+                    )
+
+                    self.db.add_bug(
+                        self.run_id,
+                        {
+                            "bug_ref": bug.bug_ref,
+                            "title": bug.title,
+                            "module": bug.module,
+                            "severity": bug.severity,
+                            "url": bug.url,
+                            "steps": bug.steps,
+                            "expected": bug.expected,
+                            "actual": bug.actual,
+                            "reproducibility": (
+                                bug.reproducibility
+                            ),
+                            "screenshot_path": (
+                                bug.screenshot_path
+                            ),
+                            "console_errors": (
+                                bug.console_errors
+                            ),
+                            "network_errors": (
+                                bug.network_errors
+                            ),
+                        },
+                        datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    )
+
+                    self.logger.warning(
+                        "Bug confirmed: %s [%s] %s",
+                        bug.bug_ref,
+                        bug.severity,
+                        bug.title,
+                    )
+
+                    result = final_result
+
+                # ----------------------------------------------------
+                # NOT REPRODUCIBLE
+                # ----------------------------------------------------
+
+                else:
+
+                    result = final_result
+
+                    result.detail = (
+                        (result.detail or "")
+                        + " "
+                        "(not reproducible on retry — "
+                        "not filed as a bug)"
+                    )
+
+            # --------------------------------------------------------
+            # STORE RESULT
+            # --------------------------------------------------------
+
+            results.append(
+                result
+            )
+
+            self.db.add_test(
+                self.run_id,
+                test_case.name,
+                test_case.category,
+                result.status,
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+                test_case.target_url,
+                result.detail,
+            )
+
+        # ============================================================
+        # FINAL STATISTICS
+        # ============================================================
+
+        passed = sum(
+            1
+            for result in results
+            if result.status == "passed"
+        )
+
+        failed = sum(
+            1
+            for result in results
+            if result.status == "failed"
+        )
+
+        skipped = sum(
+            1
+            for result in results
+            if result.status == "skipped"
+        )
+
+        self.logger.info(
+            (
+                "Testing complete: "
+                "%d passed, "
+                "%d failed, "
+                "%d skipped, "
+                "%d bug(s) confirmed."
+            ),
+            passed,
+            failed,
+            skipped,
+            len(bugs),
+        )
+
+        return results, bugs
+
+    # ================================================================
+    # REPORTING
+    # ================================================================
+
+    def _write_reports(self) -> None:
+
+        data = self.db.fetch_all(
+            self.run_id
+        )
+
+        generate_reports(
+            self.run_dir,
+            data["run"],
+            data["pages"],
+            data["tests"],
+            data["bugs"],
+        )
+
+        self.logger.info(
+            "Reports written to %s",
+            self.run_dir,
+        )
