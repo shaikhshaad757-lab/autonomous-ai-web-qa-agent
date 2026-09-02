@@ -1,4 +1,4 @@
-# HMS AI QA Agent
+# autonomous-ai-web-qa-agent
 
 An autonomous QA testing agent for an **authorized** Hospital Management System
 (HMS) test/staging environment. You give it a URL and login credentials; it
